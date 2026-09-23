@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60.8 60.8" width="1024" height="1024">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer square of the Roblox player icon (Wikimedia Commons), hole removed -->
+  <path d="M14.87 3.525 57.27 14.875 45.93 57.275 3.53 45.925Z" fill="url(#g)"/>
+</svg>

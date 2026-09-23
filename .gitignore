@@ -1,0 +1,19 @@
+# Roblox client and everything downloaded or generated locally
+/RobloxPlayer.app/
+/backups/
+/downloads/
+/logs/
+/build/
+*.dylib
+__pycache__/
+
+# Local experiments and history
+/work/
+/frameworks_backup/
+/ffmpeg6/
+/ffmpeg_compat/
+/build_shims.py
+/dialog.txt
+
+# Roblox's own icon, only the source of the tilt
+/branding/source/Roblox_player_icon_black.*

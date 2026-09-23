@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+sysroot=${DARLING_SYSROOT:-/usr/libexec/darling}
+mkdir -p "$project_dir/build"
+tmp_output=$(mktemp "$project_dir/build/.shim.XXXXXX")
+trap 'rm -f -- "$tmp_output"' EXIT
+clang -target x86_64-apple-darwin -fuse-ld=lld \
+  -isysroot "$sysroot" -mmacosx-version-min=11.0 \
+  -dynamiclib -fno-objc-arc -Werror=incompatible-function-pointer-types \
+  -Wl,-undefined,dynamic_lookup \
+  -install_name @rpath/libMacOBloxShims.dylib \
+  "$project_dir/libMacOBloxShims.m" "$project_dir/xattr_compat.c" "$project_dir/exit_compat.c" "$project_dir/missing_symbols.c" "$project_dir/net_trace.c" "$project_dir/darling_fixes.c" "$project_dir/xfixes_raw.c" "$project_dir/dns_override.c" "$project_dir/audio_hal.c" "$project_dir/gpu_info.c" "$project_dir/gl_profile.c" \
+  -lobjc -lc++ -lc++abi -framework Foundation -framework AppKit \
+  -o "$tmp_output"
+mv -- "$tmp_output" "$project_dir/build/libMacOBloxShims.dylib"
+printf 'Built: %s\n' "$project_dir/build/libMacOBloxShims.dylib"
+
+# Frameworks RobloxPlayer links that Darling does not have (see frameworks/).
+# The launcher copies them into the Darling prefix.
+for name in CoreML CoreHaptics DeviceCheck; do
+  framework="$project_dir/build/frameworks/$name.framework"
+  mkdir -p "$framework/Versions/A"
+  clang -target x86_64-apple-darwin -fuse-ld=lld \
+    -isysroot "$sysroot" -mmacosx-version-min=11.0 \
+    -dynamiclib -fno-objc-arc \
+    -install_name "/System/Library/Frameworks/$name.framework/Versions/A/$name" \
+    "$project_dir/frameworks/$name.m" -lobjc -framework CoreFoundation \
+    -o "$framework/Versions/A/$name"
+  ln -sfn A "$framework/Versions/Current"
+  ln -sfn "Versions/Current/$name" "$framework/$name"
+done
+printf 'Built: %s\n' "$project_dir/build/frameworks"

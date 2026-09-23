@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Mac O’ Blox launcher entry point."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from macoblox.app import main  # noqa: E402
+
+sys.exit(main())
