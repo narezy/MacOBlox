@@ -15,6 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from . import __version__
 from .i18n import _
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -617,6 +618,8 @@ class RobloxSession:
         cleanup_logs(int(self.settings.get("keep_logs", 30)) - 1)
         self.log_path = LOGS / time.strftime("launch-%Y%m%d-%H%M%S.log")
         log = open(self.log_path, "wb")
+        log.write(f"Mac O’ Blox {__version__}\n".encode())
+        log.flush()
         command = ["darling", "shell", "/bin/bash", "-c", LAUNCH_SCRIPT, "macoblox",
                    f"/Volumes/SystemRoot{DATA_DIR}", f"/Volumes/SystemRoot{SHIM.parent}",
                    *self.shim_variables()]

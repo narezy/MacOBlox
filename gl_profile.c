@@ -234,3 +234,66 @@ static void *macoblox_eglCreateWindowSurface(void *display, void *config, unsign
     return surface;
 }
 DYLD_INTERPOSE(macoblox_eglCreateWindowSurface, eglCreateWindowSurface)
+
+/* GL subwindows with the screen's visual.
+ *
+ * Darling's top-level windows use the last 32-bit ARGB visual the X server
+ * lists, and the OpenGL subwindow (-[X11SubWindow initWithParentWindow:
+ * frame:], XCreateSimpleWindow) inherits it. Under Xwayland with NVIDIA
+ * that visual (0x2db on an RTX 3050) had no EGL config at all, so no surface
+ * could be created for the game. Such a subwindow is replaced by one with
+ * the screen's default visual, the one the EGL config above is chosen for.
+ * Called from the X11SubWindow hook in libMacOBloxShims.m; libX11 loads
+ * with Darling's X11 backend, after this library, so it is looked up late.
+ * MACOBLOX_KEEP_SUBWINDOW_VISUAL=1 keeps Darling's behaviour,
+ * MACOBLOX_FORCE_SUBWINDOW_VISUAL=1 replaces every subwindow (to test). */
+typedef unsigned long XID;
+extern void *dlsym(void *, const char *);
+#define X_DEFAULT_HANDLE ((void *)-2)  /* RTLD_DEFAULT */
+
+unsigned long macoblox_replace_gl_subwindow(void *display, unsigned long parent, unsigned long old) {
+    const char *keep = getenv("MACOBLOX_KEEP_SUBWINDOW_VISUAL");
+    if ((keep && keep[0] == '1') || !display || !parent || !old)
+        return old;
+    int (*get_attributes)(void *, XID, void *) = dlsym(X_DEFAULT_HANDLE, "XGetWindowAttributes");
+    int (*default_screen)(void *) = dlsym(X_DEFAULT_HANDLE, "XDefaultScreen");
+    int (*default_depth)(void *, int) = dlsym(X_DEFAULT_HANDLE, "XDefaultDepth");
+    void *(*default_visual)(void *, int) = dlsym(X_DEFAULT_HANDLE, "XDefaultVisual");
+    XID (*create_colormap)(void *, XID, void *, int) = dlsym(X_DEFAULT_HANDLE, "XCreateColormap");
+    XID (*create_window)(void *, XID, int, int, unsigned int, unsigned int, unsigned int, int,
+                         unsigned int, void *, unsigned long, void *) = dlsym(X_DEFAULT_HANDLE, "XCreateWindow");
+    int (*map_window)(void *, XID) = dlsym(X_DEFAULT_HANDLE, "XMapWindow");
+    int (*destroy_window)(void *, XID) = dlsym(X_DEFAULT_HANDLE, "XDestroyWindow");
+    if (!get_attributes || !default_screen || !default_depth || !default_visual || !create_colormap ||
+        !create_window || !map_window || !destroy_window)
+        return old;
+
+    /* XWindowAttributes, LP64: x, y, width, height, border_width, depth
+     * as ints, then Visual* at 24; map_state at 84. */
+    unsigned char parent_attributes[256], old_attributes[256];
+    if (!get_attributes(display, parent, parent_attributes) || !get_attributes(display, old, old_attributes))
+        return old;
+    int screen = default_screen(display);
+    void *visual = default_visual(display, screen);
+    const char *force = getenv("MACOBLOX_FORCE_SUBWINDOW_VISUAL");  /* for testing */
+    if (!(force && force[0] == '1') &&
+        (*(int *)(parent_attributes + 20) != 32 || *(void **)(parent_attributes + 24) == visual))
+        return old;
+
+    /* XSetWindowAttributes, LP64: background_pixel at 8, border_pixel at 24,
+     * colormap at 96. */
+    unsigned char set[112] = {0};
+    *(XID *)(set + 96) = create_colormap(display, parent, visual, 0 /* AllocNone */);
+    int *geometry = (int *)old_attributes;
+    XID window = create_window(display, parent, geometry[0], geometry[1],
+                               geometry[2] > 0 ? (unsigned int)geometry[2] : 1,
+                               geometry[3] > 0 ? (unsigned int)geometry[3] : 1, 0,
+                               default_depth(display, screen), 1 /* InputOutput */, visual,
+                               (1UL << 1) | (1UL << 3) | (1UL << 13), set);
+    if (!window)
+        return old;
+    map_window(display, window);
+    destroy_window(display, old);
+    write(2, "[MacOBlox GL] GL subwindow uses the screen visual\n", 51);
+    return window;
+}

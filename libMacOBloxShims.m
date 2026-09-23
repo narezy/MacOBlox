@@ -3343,11 +3343,43 @@ static id hooked_pixel_format_init(id self, SEL cmd, const unsigned int* attribu
     return result;
 }
 
+// OpenGL subwindows get the screen's visual (gl_profile.c explains why).
+extern unsigned long macoblox_replace_gl_subwindow(void* display, unsigned long parent, unsigned long old);
+static id (*orig_x11_subwindow_init)(id, SEL, id, MacOBloxRect);
+static id hooked_x11_subwindow_init(id self, SEL cmd, id parent, MacOBloxRect frame) {
+    id result = orig_x11_subwindow_init(self, cmd, parent, frame);
+    if (!result || !parent)
+        return result;
+    Class cls = object_getClass(result);
+    Ivar window_ivar = class_getInstanceVariable(cls, "_window");
+    Ivar display_ivar = class_getInstanceVariable(cls, "_display");
+    if (!window_ivar || !display_ivar)
+        return result;
+    unsigned long* window = (unsigned long*)((char*)result + ivar_getOffset(window_ivar));
+    void* display = *(void**)((char*)result + ivar_getOffset(display_ivar));
+    unsigned long parent_handle =
+        ((unsigned long (*)(id, SEL))objc_msgSend)(parent, sel_registerName("windowHandle"));
+    *window = macoblox_replace_gl_subwindow(display, parent_handle, *window);
+    return result;
+}
+
 // Classes from Darling's X11 backend load after this library initializes, so
 // hooks on them are installed again once NSApplication finishes launching.
 static void macoblox_install_late_hooks(void) {
     static volatile int cursor_hooked;
     static volatile int window_events_hooked;
+    static volatile int subwindow_hooked;
+    Class x11_subwindow_class = objc_getClass("X11SubWindow");
+    if (x11_subwindow_class && __sync_bool_compare_and_swap(&subwindow_hooked, 0, 1)) {
+        Method method = class_getInstanceMethod(
+            x11_subwindow_class, sel_registerName("initWithParentWindow:frame:"));
+        if (method) {
+            orig_x11_subwindow_init =
+                (id (*)(id, SEL, id, MacOBloxRect))method_getImplementation(method);
+            method_setImplementation(method, (IMP)hooked_x11_subwindow_init);
+            write_str("[MacOBlox] Hooked X11SubWindow initWithParentWindow:frame: (GL visual)\n");
+        }
+    }
     Class x11_cursor_class = objc_getClass("X11Cursor");
     if (x11_cursor_class &&
         __sync_bool_compare_and_swap(&cursor_hooked, 0, 1)) {

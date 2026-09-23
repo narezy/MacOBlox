@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import author, core, i18n, studio  # noqa: E402
+from . import __version__, author, core, i18n, studio  # noqa: E402
 from .i18n import _  # noqa: E402
 
 APP_ID = "xyz.narez.MacOBlox"
@@ -58,7 +58,7 @@ def _error_dialog(window, heading, details):
     people can send it. Also kept in ~/.cache/macoblox/last-error.txt."""
     try:
         core.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        (core.CACHE_DIR / "last-error.txt").write_text(f"{heading}\n\n{details}\n")
+        (core.CACHE_DIR / "last-error.txt").write_text(f"Mac O’ Blox {__version__}\n{heading}\n\n{details}\n")
     except OSError:
         pass
     dialog = Adw.AlertDialog(heading=heading)
@@ -75,7 +75,7 @@ def _error_dialog(window, heading, details):
 
     def response(_dialog, result):
         if result == "copy":
-            window.get_clipboard().set(f"{heading}\n\n{details}")
+            window.get_clipboard().set(f"Mac O’ Blox {__version__}\n{heading}\n\n{details}")
 
     dialog.connect("response", response)
     dialog.present(window)
@@ -132,6 +132,10 @@ class PlayPage(Gtk.Box):
 
         status.set_child(box)
         self.append(status)
+        version = Gtk.Label(label=f"Mac O’ Blox {__version__}", margin_bottom=10)
+        version.add_css_class("dim-label")
+        version.add_css_class("caption")
+        self.append(version)
         self.refresh(running=window.session is not None)
 
     def refresh(self, running=False):
