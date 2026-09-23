@@ -16,9 +16,19 @@ say() { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
 install_arch() {
-  say "Installing tools (pacman)"
-  sudo pacman -S --needed --noconfirm git base-devel clang lld unzip pipewire-audio \
-    python python-gobject gtk4 libadwaita
+  # Only packages that are not installed at all: asking pacman for an
+  # installed but outdated one (pipewire-audio 1.6.8 with 1.6.9 in the repo)
+  # makes it a partial upgrade that breaks on pinned dependencies.
+  local wanted=(git base-devel clang lld unzip python python-gobject gtk4 libadwaita)
+  command -v pw-cat >/dev/null || wanted+=(pipewire-audio)
+  local missing
+  missing=$(pacman -T "${wanted[@]}" || true)
+  if [[ -n $missing ]]; then
+    say "Installing tools (pacman): $(echo $missing)"
+    # shellcheck disable=SC2086
+    sudo pacman -S --needed --noconfirm $missing ||
+      die "pacman could not install them. Update the system with 'sudo pacman -Syu' and run this again."
+  fi
   command -v darling >/dev/null && return
   say "Installing Darling from the AUR (darling-bin)"
   if command -v paru >/dev/null; then
