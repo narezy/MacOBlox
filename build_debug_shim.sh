@@ -3,7 +3,9 @@ set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # Output goes to MACOBLOX_BUILD_DIR when the sources are read-only (a package).
 build_dir=${MACOBLOX_BUILD_DIR:-$project_dir/build}
+# Packages put Darling's macOS root in /usr/libexec, a source build in /usr/local.
 sysroot=${DARLING_SYSROOT:-/usr/libexec/darling}
+[[ -d $sysroot || -n ${DARLING_SYSROOT:-} || ! -d /usr/local/libexec/darling ]] || sysroot=/usr/local/libexec/darling
 mkdir -p "$build_dir"
 tmp_output=$(mktemp "$build_dir/.shim.XXXXXX")
 trap 'rm -f -- "$tmp_output"' EXIT

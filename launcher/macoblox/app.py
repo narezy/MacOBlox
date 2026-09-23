@@ -39,7 +39,46 @@ DNS_CHOICES = [
 
 
 def _toast(overlay, text):
-    overlay.add_toast(Adw.Toast.new(text))
+    toast = Adw.Toast.new(text)
+    # Error texts contain <, > and & (compiler output, paths); as markup they
+    # would turn the toast empty.
+    toast.set_use_markup(False)
+    overlay.add_toast(toast)
+
+
+def _button_row(title):
+    """A clickable row; Adw.ButtonRow needs libadwaita 1.6 (Ubuntu 24.04 has 1.5)."""
+    if hasattr(Adw, "ButtonRow"):
+        return Adw.ButtonRow(title=title)
+    return Adw.ActionRow(title=title, activatable=True)
+
+
+def _error_dialog(window, heading, details):
+    """Shows the whole error text, selectable and with a copy button, so
+    people can send it. Also kept in ~/.cache/macoblox/last-error.txt."""
+    try:
+        core.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (core.CACHE_DIR / "last-error.txt").write_text(f"{heading}\n\n{details}\n")
+    except OSError:
+        pass
+    dialog = Adw.AlertDialog(heading=heading)
+    view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR,
+                        top_margin=8, bottom_margin=8, left_margin=8, right_margin=8)
+    view.get_buffer().set_text(details)
+    scroller = Gtk.ScrolledWindow(child=view, min_content_height=160, max_content_height=360,
+                                  propagate_natural_height=True)
+    scroller.add_css_class("card")
+    dialog.set_extra_child(scroller)
+    dialog.add_response("copy", _("Copy"))
+    dialog.add_response("close", _("Close"))
+    dialog.set_default_response("close")
+
+    def response(_dialog, result):
+        if result == "copy":
+            window.get_clipboard().set(f"{heading}\n\n{details}")
+
+    dialog.connect("response", response)
+    dialog.present(window)
 
 
 class PlayPage(Gtk.Box):
@@ -347,7 +386,7 @@ class SettingsPage(Adw.PreferencesPage):
         self.add(roblox)
 
         account = Adw.PreferencesGroup(title=_("Account"))
-        logout = Adw.ButtonRow(title=_("Sign out"))
+        logout = _button_row(_("Sign out"))
         logout.add_css_class("destructive-action")
         logout.connect("activated", lambda *_args: self.logout())
         account.add(logout)
@@ -364,14 +403,14 @@ class SettingsPage(Adw.PreferencesPage):
             row = Adw.SwitchRow(title=_(title), subtitle=core.TRACE_ENV[key], active=settings[key])
             row.connect("notify::active", lambda r, _pspec, k=key: window.set_setting(k, r.get_active()))
             diagnostics.add(row)
-        logs = Adw.ButtonRow(title=_("Open logs folder"))
+        logs = _button_row(_("Open logs folder"))
         logs.connect("activated", lambda *_args: Gio.AppInfo.launch_default_for_uri(
             core.LOGS.as_uri(), None))
         diagnostics.add(logs)
-        rebuild = Adw.ButtonRow(title=_("Rebuild shim"))
+        rebuild = _button_row(_("Rebuild shim"))
         rebuild.connect("activated", lambda *_args: self.rebuild())
         diagnostics.add(rebuild)
-        restart = Adw.ButtonRow(title=_("Restart Darling"))
+        restart = _button_row(_("Restart Darling"))
         restart.connect("activated", lambda *_args: self.restart_darling())
         diagnostics.add(restart)
         self.add(diagnostics)
@@ -432,7 +471,7 @@ class SettingsPage(Adw.PreferencesPage):
             self.version_row.set_subtitle(core.installed_version() or _("not found"))
             self.window.play_page.refresh()
             if error:
-                _toast(self.window.toasts, _("Update failed: {error}", error=error))
+                _error_dialog(self.window, _("Update failed"), str(error) or repr(error))
             else:
                 _toast(self.window.toasts, _("Roblox updated, the old version is in backups/"))
 
@@ -616,7 +655,7 @@ class LauncherWindow(Adw.ApplicationWindow):
     def _started(self, session, error):
         if error:
             self.play_page.refresh()
-            _toast(self.toasts, _("Could not start: {error}", error=error))
+            _error_dialog(self, _("Could not start Roblox"), str(error) or repr(error))
             return
         self.session = session
         self.last_log = session.log_path

@@ -22,48 +22,52 @@ survives restarts, and a small launcher with fast flags. English and Russian.
 
 ## Install
 
-**1. Darling and a few tools**
+```bash
+curl -fsSL https://raw.githubusercontent.com/narezy/MacOBlox/main/install.sh | bash
+```
+
+It installs Darling and everything else, then puts **Mac O’ Blox** in the app
+menu. Open it, press **Install Roblox**, then **Play**. Run the same command
+again to update.
+
+Works on Arch and its relatives (CachyOS, EndeavourOS, Manjaro), Ubuntu 24.04+,
+Debian 13, Linux Mint 22 and Fedora with Darling built from source.
 
 <details>
-<summary>Arch, CachyOS, EndeavourOS, Manjaro</summary>
+<summary>Install by hand</summary>
+
+**1. Darling and the tools**
+
+Arch, CachyOS, EndeavourOS, Manjaro:
 
 ```bash
 paru -S darling-bin
-sudo pacman -S clang lld unzip pipewire python-gobject gtk4 libadwaita
+sudo pacman -S clang lld unzip pipewire-audio python-gobject gtk4 libadwaita
 ```
-</details>
 
-<details>
-<summary>Debian, Ubuntu, Mint</summary>
-
-Download `debs_*.zip` from the [Darling releases](https://github.com/darlinghq/darling/releases), then:
+Debian, Ubuntu, Mint: download `debs_*.zip` from the
+[Darling releases](https://github.com/darlinghq/darling/releases), then:
 
 ```bash
 unzip debs_*.zip -d darling-debs
-sudo apt install ./darling-debs/*.deb
+sudo apt install ./darling-debs/*/*.deb
 sudo apt install clang lld unzip pipewire-bin python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 ```
-</details>
 
-<details>
-<summary>Fedora and others</summary>
-
-Build Darling with the [official guide](https://docs.darlinghq.org/build-instructions.html), then:
+Fedora and others: build Darling with the
+[official guide](https://docs.darlinghq.org/build-instructions.html), then:
 
 ```bash
 sudo dnf install clang lld unzip pipewire-utils python3-gobject gtk4 libadwaita
 ```
-</details>
 
 **2. Mac O’ Blox**
 
 ```bash
-git clone https://github.com/narezy/MacOBlox
-cd MacOBlox
-./launcher/install.sh
+git clone https://github.com/narezy/MacOBlox ~/.local/share/MacOBlox
+~/.local/share/MacOBlox/launcher/install.sh
 ```
-
-Open **Mac O’ Blox** from the app menu, press **Install Roblox**, then **Play**.
+</details>
 
 ## Questions
 
@@ -76,6 +80,14 @@ session is stored only on your computer, in
 like a password. **Sign out** in the settings deletes it.
 
 Mac O’ Blox is not made by Roblox, using it is at your own risk.
+</details>
+
+<details>
+<summary>Something does not work</summary>
+
+When Roblox does not start, the launcher shows the error with a **Copy**
+button. Send it to the [Discord](https://discord.gg/bpX9rTttCa). The last
+error is also saved in `~/.cache/macoblox/last-error.txt`.
 </details>
 
 <details>

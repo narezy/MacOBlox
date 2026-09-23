@@ -28,8 +28,11 @@ SHIM = BUILD_DIR / "libMacOBloxShims.dylib"
 # Frameworks RobloxPlayer links that Darling lacks; stubs from frameworks/.
 FRAMEWORKS = ["CoreML", "CoreHaptics", "DeviceCheck"]
 FRAMEWORKS_BUILD = BUILD_DIR / "frameworks"
-DARLING_SYSROOT = Path("/usr/libexec/darling")
-DARLING_PREFIX = Path.home() / ".darling"
+# Packages install Darling's macOS root to /usr/libexec/darling, a build from
+# source to /usr/local/libexec/darling.
+DARLING_SYSROOT = next((path for path in (Path("/usr/libexec/darling"), Path("/usr/local/libexec/darling"))
+                        if path.is_dir()), Path("/usr/libexec/darling"))
+DARLING_PREFIX = Path(os.environ.get("DPREFIX") or Path.home() / ".darling")
 NATIVE_LIBS = ["libavcodec", "libavformat", "libavutil", "libswresample"]
 NATIVE_BUILD = BUILD_DIR / "native"
 BUILD_SCRIPT = PROJECT / "build_debug_shim.sh"
@@ -43,7 +46,7 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / 
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "macoblox"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
-DARLING_HOME = Path.home() / ".darling" / "Users" / os.environ.get("USER", "user")
+DARLING_HOME = DARLING_PREFIX / "Users" / os.environ.get("USER", "user")
 SESSION_FILES = [
     DARLING_HOME / "Library" / "MacOBlox" / "Cookies.plist",
     DARLING_HOME / "Library" / "MacOBlox" / "Keychain",
@@ -212,8 +215,14 @@ def roblox_pids():
     return pids
 
 
+def _darlingservers():
+    """darlingserver processes of our prefix."""
+    return [pid for pid, args in _user_processes()
+            if args.startswith(f"darlingserver {DARLING_PREFIX} ")]
+
+
 def darlingserver_running():
-    return any(args.startswith("darlingserver") for _, args in _user_processes())
+    return bool(_darlingservers())
 
 
 def stop_roblox():
@@ -235,7 +244,7 @@ def stop_roblox():
 
 def _darling_path(path):
     """Path of a file under the Darling prefix as seen inside the container."""
-    return "/" + str(path.relative_to(Path.home() / ".darling"))
+    return "/" + str(path.relative_to(DARLING_PREFIX))
 
 
 def logout():
@@ -270,7 +279,8 @@ def cleanup_logs(keep):
 
 def build_shim():
     result = subprocess.run([str(BUILD_SCRIPT)], capture_output=True, text=True,
-                            env=dict(os.environ, MACOBLOX_BUILD_DIR=str(BUILD_DIR)))
+                            env=dict(os.environ, MACOBLOX_BUILD_DIR=str(BUILD_DIR),
+                                     DARLING_SYSROOT=str(DARLING_SYSROOT)))
     return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
@@ -279,25 +289,47 @@ def shim_built():
                                  for name in FRAMEWORKS)
 
 
-def _copy_into_prefix(env, source_dir, target_dir, names):
-    """cp source_dir/<name> into the prefix's target_dir. Done through darling
-    so the prefix's overlay sees the new files."""
-    script = 'target=$1; shift; for name in "$@"; do cp -R "$0/$name" "$target/" || exit 1; done'
-    subprocess.run(["darling", "shell", "/bin/sh", "-c", script,
-                    f"/Volumes/SystemRoot{source_dir}", target_dir, *names],
-                   env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, timeout=120, check=True)
+def missing_tools():
+    """Programs the launcher needs that are not installed."""
+    needed = {"darling": "darling", "clang": "clang", "ld.lld": "lld", "unzip": "unzip"}
+    missing = [package for program, package in needed.items() if not shutil.which(program)]
+    if not DARLING_SYSROOT.is_dir() and "darling" not in missing:
+        missing.append(f"darling ({DARLING_SYSROOT})")
+    return missing
 
 
-def install_frameworks(env):
-    """Copies the stub frameworks into the Darling prefix unless it (or
-    Darling itself) already has them."""
+def _missing_frameworks():
     relative = Path("System/Library/Frameworks")
-    missing = [f"{name}.framework" for name in FRAMEWORKS
-               if not (DARLING_PREFIX / relative / f"{name}.framework").exists()
-               and not (DARLING_SYSROOT / relative / f"{name}.framework").exists()]
-    if missing:
-        _copy_into_prefix(env, FRAMEWORKS_BUILD, f"/{relative}", missing)
+    return [name for name in FRAMEWORKS
+            if not (DARLING_PREFIX / relative / f"{name}.framework").exists()
+            and not (DARLING_SYSROOT / relative / f"{name}.framework").exists()]
+
+
+def prepare_prefix(env):
+    """Puts the stub frameworks and the patched ffmpeg bridges into the
+    Darling prefix. Its system folders belong to root, so programs inside
+    Darling cannot write there; the files go straight into the prefix's
+    upper layer (~/.darling) while Darling is stopped, then Darling sees them
+    on its next start."""
+    frameworks = _missing_frameworks()
+    bridges = _patched_ffmpeg_bridges()
+    if not frameworks and not bridges:
+        return
+    if not DARLING_PREFIX.is_dir():
+        # Let Darling create the prefix first.
+        subprocess.run(["darling", "shell", "/bin/true"], env=env, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+    if darlingserver_running():
+        restart_darling()
+    target = DARLING_PREFIX / "System" / "Library" / "Frameworks"
+    target.mkdir(parents=True, exist_ok=True)
+    for name in frameworks:
+        shutil.copytree(FRAMEWORKS_BUILD / f"{name}.framework", target / f"{name}.framework",
+                        symlinks=True, dirs_exist_ok=True)
+    target = DARLING_PREFIX / "usr" / "lib" / "native"
+    target.mkdir(parents=True, exist_ok=True)
+    for path in bridges:
+        shutil.copy2(path, target / path.name)
 
 
 def _initializer_offset(data):
@@ -346,14 +378,14 @@ def _host_libraries():
     return {line.split()[0] for line in output.splitlines()[1:] if line.strip()}
 
 
-def install_ffmpeg_bridges(env):
+def _patched_ffmpeg_bridges():
     """Darling's ffmpeg bridges (/usr/lib/native/libav*.dylib) load one exact
     host ffmpeg version from an initializer and the game exits when it is
     missing ("Cannot load libavformat.so.60"). Roblox does not need ffmpeg,
     so when the host has another version, the prefix gets copies whose
-    initializer returns right away."""
+    initializer returns right away. Returns the patched files to install."""
     host = None
-    patch = []
+    patched = []
     for name in NATIVE_LIBS:
         if (DARLING_PREFIX / "usr/lib/native" / f"{name}.dylib").exists():
             continue
@@ -373,9 +405,8 @@ def install_ffmpeg_bridges(env):
         NATIVE_BUILD.mkdir(parents=True, exist_ok=True)
         (NATIVE_BUILD / stock.name).write_bytes(data)
         (NATIVE_BUILD / stock.name).chmod(0o755)
-        patch.append(stock.name)
-    if patch:
-        _copy_into_prefix(env, NATIVE_BUILD, "/usr/lib/native", patch)
+        patched.append(NATIVE_BUILD / stock.name)
+    return patched
 
 
 def _process_state(pid):
@@ -389,7 +420,7 @@ def clear_stale_darling():
     """If the container's init is gone or a zombie (its parent never reaped
     it), darling refuses to start ("Cannot open mnt namespace file"); move
     its pid file and socket aside so a new server starts."""
-    prefix = Path.home() / ".darling"
+    prefix = DARLING_PREFIX
     try:
         pid = int((prefix / ".init.pid").read_text().strip())
     except (OSError, ValueError):
@@ -403,13 +434,24 @@ def clear_stale_darling():
 
 
 def restart_darling():
-    for pid, args in _user_processes():
-        if args.startswith("darlingserver"):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
+    """Stops the prefix's darlingserver and its launchd, which otherwise
+    stays behind as an orphan; the next darling command starts them again."""
+    try:
+        init = int((DARLING_PREFIX / ".init.pid").read_text().strip())
+    except (OSError, ValueError):
+        init = None
+    for pid in _darlingservers():
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
     time.sleep(2)
+    if init and _process_state(init) not in (None, "Z"):
+        try:
+            os.kill(init, signal.SIGTERM)
+        except OSError:
+            pass
+        time.sleep(1)
     clear_stale_darling()
 
 
@@ -551,11 +593,15 @@ class RobloxSession:
         return variables
 
     def start(self):
+        missing = missing_tools()
+        if missing:
+            raise RuntimeError(_("Install these first: {programs}", programs=", ".join(missing)))
         if not shim_built():
             ok, output = build_shim()
             if not ok:
                 raise RuntimeError(_("Could not build the shim:\n{output}", output=output))
         env = self.environment()
+        prepare_prefix(env)
         provider = self.settings.get("dns", "system")
         if provider != "system" and (provider != "custom" or self.settings.get("dns_custom")):
             from .dns import DnsForwarder
@@ -567,8 +613,6 @@ class RobloxSession:
             # check in; warm the server up with a trivial command first.
             subprocess.run(["darling", "shell", "/bin/true"], env=env, stdin=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-        install_frameworks(env)
-        install_ffmpeg_bridges(env)
         LOGS.mkdir(parents=True, exist_ok=True)
         cleanup_logs(int(self.settings.get("keep_logs", 30)) - 1)
         self.log_path = LOGS / time.strftime("launch-%Y%m%d-%H%M%S.log")
