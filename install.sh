@@ -61,7 +61,7 @@ install_fedora() {
 
 main() {
   # Package managers may ask questions; with curl | bash stdin is this script.
-  if [[ ! -t 0 && -r /dev/tty ]]; then exec </dev/tty; fi
+  if [[ ! -t 0 ]] && (: </dev/tty) 2>/dev/null; then exec </dev/tty; fi
   [[ $(uname -m) == x86_64 ]] || die "Darling runs only on x86_64."
   [[ $EUID -ne 0 ]] || die "Run this as your user, not root. sudo is used when needed."
   [[ -r /etc/os-release ]] && . /etc/os-release
