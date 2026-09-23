@@ -1,4 +1,5 @@
-/* Minimal X11 client that only hides/shows the cursor with XFixes.
+/* Minimal X11 client: hides/shows the cursor with XFixes, and answers which
+ * visual a window and the screen use (for picking EGL configs, gl_profile.c).
  *
  * Why: under Xwayland, XWarpPointer moves only the X server's pointer and the
  * next Wayland motion undoes it, so recentering during mouse lock bounced the
@@ -26,10 +27,12 @@ static int x_socket = -1;
 static unsigned char xfixes_opcode;
 static unsigned int root_window;
 
-static int write_all(const void *data, size_t length) {
+/* The helpers take the socket: the cursor thread keeps one connection open,
+ * visual queries open their own. */
+static int write_all_on(int fd, const void *data, size_t length) {
     const unsigned char *bytes = data;
     while (length) {
-        ssize_t written = write(x_socket, bytes, length);
+        ssize_t written = write(fd, bytes, length);
         if (written <= 0)
             return 0;
         bytes += written;
@@ -38,10 +41,10 @@ static int write_all(const void *data, size_t length) {
     return 1;
 }
 
-static int read_all(void *data, size_t length) {
+static int read_all_on(int fd, void *data, size_t length) {
     unsigned char *bytes = data;
     while (length) {
-        ssize_t got = read(x_socket, bytes, length);
+        ssize_t got = read(fd, bytes, length);
         if (got <= 0)
             return 0;
         bytes += got;
@@ -51,9 +54,9 @@ static int read_all(void *data, size_t length) {
 }
 
 /* Read the 32-byte reply to the last request, skipping events. */
-static int read_reply(unsigned char reply[32]) {
+static int read_reply_on(int fd, unsigned char reply[32]) {
     for (int guard = 0; guard < 256; guard++) {
-        if (!read_all(reply, 32))
+        if (!read_all_on(fd, reply, 32))
             return 0;
         if (reply[0] == 0)
             return 0; /* X error */
@@ -62,7 +65,7 @@ static int read_reply(unsigned char reply[32]) {
             unsigned char skip[256];
             while (extra) {
                 size_t chunk = extra < sizeof skip ? extra : sizeof skip;
-                if (!read_all(skip, chunk))
+                if (!read_all_on(fd, skip, chunk))
                     return 0;
                 extra -= (unsigned int)chunk;
             }
@@ -86,7 +89,7 @@ static int display_number(void) {
     return number;
 }
 
-static int connect_display(void) {
+static int connect_display_on(int *out) {
     struct darwin_sockaddr_un address = {0};
     int number = display_number();
     /* Darling's /tmp is private; the host's X socket is under SystemRoot. */
@@ -106,33 +109,37 @@ static int connect_display(void) {
         address.path[length++] = digits[--count];
     address.family = 1; /* AF_UNIX */
     address.len = (unsigned char)(2 + length + 1);
-    x_socket = socket(1, 1 /* SOCK_STREAM */, 0);
-    if (x_socket < 0)
+    int fd = socket(1, 1 /* SOCK_STREAM */, 0);
+    if (fd < 0)
         return 0;
-    if (connect(x_socket, &address, sizeof address) != 0) {
-        close(x_socket);
-        x_socket = -1;
+    if (connect(fd, &address, sizeof address) != 0) {
+        close(fd);
         return 0;
     }
+    *out = fd;
     return 1;
 }
 
-static int setup(void) {
+/* Connection setup; returns the first screen's root window and visual. */
+static int setup_on(int fd, unsigned int *root, unsigned int *visual) {
     /* 'l' = little endian, protocol 11.0, no authorization. */
     unsigned char request[12] = {'l', 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     unsigned char header[8];
-    if (!write_all(request, sizeof request) || !read_all(header, sizeof header) || header[0] != 1)
+    if (!write_all_on(fd, request, sizeof request) || !read_all_on(fd, header, sizeof header) ||
+        header[0] != 1)
         return 0;
     unsigned int body_length = *(unsigned short *)(header + 6) * 4u;
     static unsigned char body[1 << 16];
-    if (body_length > sizeof body || !read_all(body, body_length))
+    if (body_length > sizeof body || !read_all_on(fd, body, body_length))
         return 0;
     unsigned int vendor_length = *(unsigned short *)(body + 16);
     unsigned int formats = body[21];
     unsigned int screen = 32 + ((vendor_length + 3) & ~3u) + 8 * formats;
-    if (screen + 4 > body_length)
+    if (screen + 36 > body_length)
         return 0;
-    root_window = *(unsigned int *)(body + screen);
+    *root = *(unsigned int *)(body + screen);
+    if (visual)
+        *visual = *(unsigned int *)(body + screen + 32);
     return 1;
 }
 
@@ -140,19 +147,19 @@ static int query_xfixes(void) {
     unsigned char request[16] = {98 /* QueryExtension */, 0, 4, 0, 6, 0, 0, 0,
                                  'X', 'F', 'I', 'X', 'E', 'S', 0, 0};
     unsigned char reply[32];
-    if (!write_all(request, sizeof request) || !read_reply(reply) || !reply[8])
+    if (!write_all_on(x_socket, request, sizeof request) || !read_reply_on(x_socket, reply) || !reply[8])
         return 0;
     xfixes_opcode = reply[9];
     unsigned char version[12] = {xfixes_opcode, 0 /* QueryVersion */, 3, 0, 5, 0, 0, 0, 0, 0, 0, 0};
-    return write_all(version, sizeof version) && read_reply(reply);
+    return write_all_on(x_socket, version, sizeof version) && read_reply_on(x_socket, reply);
 }
 
 int macoblox_raw_xfixes_open(void) {
     if (x_socket >= 0)
         return 1;
-    if (!connect_display())
+    if (!connect_display_on(&x_socket))
         return 0;
-    if (!setup() || !query_xfixes()) {
+    if (!setup_on(x_socket, &root_window, 0) || !query_xfixes()) {
         close(x_socket);
         x_socket = -1;
         return 0;
@@ -166,5 +173,26 @@ int macoblox_raw_xfixes_set_hidden(int hidden) {
     unsigned char request[8] = {xfixes_opcode, hidden ? 29 /* HideCursor */ : 30 /* ShowCursor */,
                                 2, 0};
     *(unsigned int *)(request + 4) = root_window;
-    return write_all(request, sizeof request);
+    return write_all_on(x_socket, request, sizeof request);
+}
+
+/* The screen's default visual and, if `window` is not 0, that window's
+ * visual (GetWindowAttributes). Opens and closes its own connection.
+ * Returns 0 when the X server cannot be reached. */
+int macoblox_raw_x_visuals(unsigned int window, unsigned int *root_visual, unsigned int *window_visual) {
+    int fd;
+    unsigned int root;
+    if (!connect_display_on(&fd))
+        return 0;
+    int ok = setup_on(fd, &root, root_visual);
+    if (ok && window && window_visual) {
+        unsigned char request[8] = {3 /* GetWindowAttributes */, 0, 2, 0};
+        unsigned char reply[32];
+        *(unsigned int *)(request + 4) = window;
+        ok = write_all_on(fd, request, sizeof request) && read_reply_on(fd, reply);
+        if (ok)
+            *window_visual = *(unsigned int *)(reply + 8);
+    }
+    close(fd);
+    return ok;
 }
