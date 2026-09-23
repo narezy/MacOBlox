@@ -237,11 +237,12 @@ DYLD_INTERPOSE(macoblox_eglCreateWindowSurface, eglCreateWindowSurface)
 
 /* GL subwindows with the screen's visual.
  *
- * Darling's top-level windows use the last 32-bit ARGB visual the X server
- * lists, and the OpenGL subwindow (-[X11SubWindow initWithParentWindow:
- * frame:], XCreateSimpleWindow) inherits it. Under Xwayland with NVIDIA
- * that visual (0x2db on an RTX 3050) had no EGL config at all, so no surface
- * could be created for the game. Such a subwindow is replaced by one with
+ * Darling creates its top-level windows with the visual glXChooseVisual
+ * returns for RGBA + double buffer + depth, and the OpenGL subwindow
+ * (-[X11SubWindow initWithParentWindow:frame:], XCreateSimpleWindow)
+ * inherits it. Mesa returns the screen's visual; NVIDIA returns a GLX visual
+ * of its own (0x2db, 24 bit, on an RTX 3050) that has no EGL config, so no
+ * surface could be created for the game. Such a subwindow is replaced by one with
  * the screen's default visual, the one the EGL config above is chosen for.
  * Called from the X11SubWindow hook in libMacOBloxShims.m; libX11 loads
  * with Darling's X11 backend, after this library, so it is looked up late.
@@ -276,8 +277,7 @@ unsigned long macoblox_replace_gl_subwindow(void *display, unsigned long parent,
     int screen = default_screen(display);
     void *visual = default_visual(display, screen);
     const char *force = getenv("MACOBLOX_FORCE_SUBWINDOW_VISUAL");  /* for testing */
-    if (!(force && force[0] == '1') &&
-        (*(int *)(parent_attributes + 20) != 32 || *(void **)(parent_attributes + 24) == visual))
+    if (!(force && force[0] == '1') && *(void **)(parent_attributes + 24) == visual)
         return old;
 
     /* XSetWindowAttributes, LP64: background_pixel at 8, border_pixel at 24,
