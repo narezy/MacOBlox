@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import author, core, i18n  # noqa: E402
+from . import author, core, i18n, studio  # noqa: E402
 from .i18n import _  # noqa: E402
 
 APP_ID = "xyz.narez.MacOBlox"
@@ -106,6 +106,14 @@ class PlayPage(Gtk.Box):
         self.stop.set_visible(False)
         self.stop.connect("clicked", lambda *_args: window.stop())
         box.append(self.stop)
+
+        self.studio = Gtk.Button(label=_("Roblox Studio"))
+        self.studio.add_css_class("pill")
+        self.studio.set_size_request(220, -1)
+        self.studio.connect("clicked", lambda *_args: window.studio_clicked())
+        box.append(self.studio)
+        self.studio_progress = Gtk.ProgressBar(show_text=True, visible=False)
+        box.append(self.studio_progress)
 
         self.log_button = Gtk.Button(label=_("Open last log"))
         self.log_button.add_css_class("flat")
@@ -589,6 +597,9 @@ class LauncherWindow(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Mac O’ Blox")
         self.set_default_size(560, 680)
+        # A fixed size makes tiling compositors (Hyprland, Sway) float the
+        # launcher like a dialog instead of tiling it.
+        self.set_resizable(False)
         self.settings = core.load_settings()
         i18n.set_language(self.settings.get("language", "en"))
         self.session = None
@@ -634,6 +645,62 @@ class LauncherWindow(Adw.ApplicationWindow):
         else:
             self.stack.set_visible_child_name("settings")
             self.settings_page.check_updates(install=True)
+
+    def studio_clicked(self):
+        if studio.running():
+            _toast(self.toasts, _("Roblox Studio is already running"))
+            return
+        if not studio.needs_install():
+            self._update_and_start_studio()
+            return
+        dialog = Adw.AlertDialog(
+            heading=_("Install Roblox Studio?"),
+            body=_("Studio runs in its Windows version through Wine. Mac O’ Blox downloads Wine, "
+                   "DXVK and Studio, about 800 MB."))
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("install", _("Install"))
+        dialog.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect("response", lambda _d, result: result == "install" and self._update_and_start_studio())
+        dialog.present(self)
+
+    def _update_and_start_studio(self):
+        """Installs or updates Studio when needed, then starts it."""
+        page = self.play_page
+        page.studio.set_sensitive(False)
+        page.studio.set_label(_("Checking…"))
+
+        def progress(fraction, text):
+            GLib.idle_add(page.studio_progress.set_visible, True)
+            GLib.idle_add(page.studio_progress.set_fraction, fraction)
+            GLib.idle_add(page.studio_progress.set_text, text)
+
+        def work():
+            try:
+                studio.install(progress)
+            except Exception as error:
+                if studio.needs_install():
+                    raise
+                # Offline or Roblox unreachable: start the installed version.
+                print("Studio update skipped:", error)
+            studio.launch()
+
+        def done(_result, error):
+            page.studio.set_sensitive(True)
+            page.studio.set_label(_("Roblox Studio"))
+            page.studio_progress.set_visible(False)
+            if error:
+                _error_dialog(self, _("Could not start Roblox Studio"), str(error) or repr(error))
+            else:
+                _toast(self.toasts, _("Starting Roblox Studio…"))
+
+        def run():
+            try:
+                work()
+                GLib.idle_add(done, None, None)
+            except Exception as error:
+                GLib.idle_add(done, None, error)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def launch(self):
         if self.session:

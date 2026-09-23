@@ -4,6 +4,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# `macoblox --studio [link or file]` opens Roblox Studio directly; the system
+# calls it for roblox-studio: and roblox-studio-auth: links (sign in).
+if sys.argv[1:2] == ["--studio"]:
+    from macoblox import studio  # noqa: E402
+    if not studio.needs_install():
+        studio.launch(sys.argv[2:])
+        sys.exit(0)
+
 from macoblox.app import main  # noqa: E402
 
 sys.exit(main())

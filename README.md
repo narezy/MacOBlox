@@ -18,7 +18,8 @@
 <br>
 
 Full graphics with antialiasing, sound, camera and mouse lock, a session that
-survives restarts, and a small launcher with fast flags. English and Russian.
+survives restarts, and a small launcher with fast flags. Roblox Studio too, in
+its Windows version through Wine. English and Russian.
 
 ## Install
 
@@ -103,6 +104,15 @@ however you like, with a password or with Quick Login.
 
 Some providers break Roblox's addresses. In **Settings → DNS for Roblox** pick
 Quad9 or Cloudflare. Only Roblox uses it, the rest of the system keeps its DNS.
+</details>
+
+<details>
+<summary>Roblox Studio</summary>
+
+Press **Roblox Studio** in the launcher. The first time it downloads Wine, DXVK
+and Studio (about 800 MB) into its own folder, nothing is installed system-wide.
+To sign in, Studio opens the Roblox login in your browser; when the browser asks
+how to open the `roblox-studio-auth` link, choose **Roblox Studio (Mac O’ Blox)**.
 </details>
 
 <details>

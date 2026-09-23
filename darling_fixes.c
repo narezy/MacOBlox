@@ -86,3 +86,121 @@ static int macoblox_pthread_create(void **thread, const darwin_pthread_attr_t *a
     return pthread_create(thread, attr, start, argument);
 }
 DYLD_INTERPOSE(macoblox_pthread_create, pthread_create)
+
+/* Condition variables: the same lost psynch wakeups hit pthread_cond_wait.
+ * Leaving a game, the network thread waited 9.4 s for a signal that had
+ * already been sent (until its own ~10 s timeout). POSIX allows spurious
+ * wakeups and correct callers re-check their predicate, so waits are cut
+ * into slices that return as spurious wakeups. Every wait is an RPC to
+ * darlingserver, so the slice starts at 50 ms and doubles up to 1 s while
+ * the same thread keeps waiting on the same condition (flat 50 ms slices
+ * cost darlingserver half a core). MACOBLOX_NATIVE_COND=1 turns this off. */
+struct darwin_timespec { long tv_sec; long tv_nsec; };
+struct darwin_timeval { long tv_sec; int tv_usec; };
+extern int pthread_cond_wait(void *, void *);
+extern int pthread_cond_timedwait(void *, void *, const struct darwin_timespec *);
+extern int gettimeofday(struct darwin_timeval *, void *);
+
+#define DARWIN_ETIMEDOUT 60
+#define COND_SLICE_NS 50000000L
+
+static int native_cond(void) {
+    static int native = -1;
+    if (native < 0) {
+        const char *value = getenv("MACOBLOX_NATIVE_COND");
+        native = value && value[0] ? 1 : 0;
+    }
+    return native;
+}
+
+#define COND_SLICE_MAX_NS 1000000000L
+
+/* Per-thread slice state in pthread TSD slots: __thread variables would
+ * go through dyld's TLV code, which itself waits on locks during startup
+ * and deadlocked the client right after NSApplicationMain. */
+extern int pthread_key_create(unsigned long *, void (*)(void *));
+extern void *pthread_getspecific(unsigned long);
+extern int pthread_setspecific(unsigned long, const void *);
+static unsigned long cond_key, slice_key;
+static volatile int keys_ready;
+
+__attribute__((constructor)) static void create_slice_keys(void) {
+    if (pthread_key_create(&cond_key, 0) == 0 && pthread_key_create(&slice_key, 0) == 0)
+        keys_ready = 1;
+}
+
+/* The slice for this wait: doubles while the thread keeps timing out on the
+ * same condition variable, starts again at 50 ms otherwise. */
+static long next_slice(void *cond) {
+    if (!keys_ready)
+        return COND_SLICE_NS;
+    long length = (long)pthread_getspecific(slice_key);
+    if (cond != pthread_getspecific(cond_key) || !length) {
+        pthread_setspecific(cond_key, cond);
+        length = COND_SLICE_NS;
+    } else if (length < COND_SLICE_MAX_NS) {
+        length *= 2;
+    }
+    pthread_setspecific(slice_key, (void *)length);
+    return length;
+}
+
+static void wait_finished(int sliced_out) {
+    if (!sliced_out && keys_ready)
+        pthread_setspecific(slice_key, 0);
+}
+
+static struct darwin_timespec slice_deadline_ns(long length) {
+    struct darwin_timeval now;
+    gettimeofday(&now, 0);
+    struct darwin_timespec deadline = {now.tv_sec, now.tv_usec * 1000L + length};
+    while (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    return deadline;
+}
+
+static int macoblox_pthread_cond_wait(void *cond, void *mutex) {
+    if (native_cond())
+        return pthread_cond_wait(cond, mutex);
+    struct darwin_timespec deadline = slice_deadline_ns(next_slice(cond));
+    int result = pthread_cond_timedwait(cond, mutex, &deadline);
+    wait_finished(result == DARWIN_ETIMEDOUT);
+    return result == DARWIN_ETIMEDOUT ? 0 : result;
+}
+DYLD_INTERPOSE(macoblox_pthread_cond_wait, pthread_cond_wait)
+
+static int macoblox_pthread_cond_timedwait(void *cond, void *mutex, const struct darwin_timespec *abstime) {
+    if (native_cond() || !abstime)
+        return pthread_cond_timedwait(cond, mutex, abstime);
+    struct darwin_timespec slice = slice_deadline_ns(next_slice(cond));
+    int caller_deadline_first = abstime->tv_sec < slice.tv_sec ||
+        (abstime->tv_sec == slice.tv_sec && abstime->tv_nsec <= slice.tv_nsec);
+    if (caller_deadline_first) {
+        wait_finished(0);
+        return pthread_cond_timedwait(cond, mutex, abstime);
+    }
+    int result = pthread_cond_timedwait(cond, mutex, &slice);
+    wait_finished(result == DARWIN_ETIMEDOUT);
+    return result == DARWIN_ETIMEDOUT ? 0 : result;
+}
+DYLD_INTERPOSE(macoblox_pthread_cond_timedwait, pthread_cond_timedwait)
+
+extern int pthread_cond_timedwait_relative_np(void *, void *, const struct darwin_timespec *);
+
+static int macoblox_pthread_cond_timedwait_relative_np(void *cond, void *mutex,
+                                                       const struct darwin_timespec *relative) {
+    if (native_cond() || !relative)
+        return pthread_cond_timedwait_relative_np(cond, mutex, relative);
+    long length = next_slice(cond);
+    if (relative->tv_sec * 1000000000L + relative->tv_nsec <= length) {
+        wait_finished(0);
+        return pthread_cond_timedwait_relative_np(cond, mutex, relative);
+    }
+    struct darwin_timespec slice = {length / 1000000000L, length % 1000000000L};
+    int result = pthread_cond_timedwait_relative_np(cond, mutex, &slice);
+    wait_finished(result == DARWIN_ETIMEDOUT);
+    return result == DARWIN_ETIMEDOUT ? 0 : result;
+}
+DYLD_INTERPOSE(macoblox_pthread_cond_timedwait_relative_np, pthread_cond_timedwait_relative_np)

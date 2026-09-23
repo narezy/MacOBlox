@@ -25,6 +25,22 @@ RU = {
     "Install these first: {programs}": "Сначала установи: {programs}",
     "Close": "Закрыть",
     "Install Roblox": "Установить Roblox",
+    "Roblox Studio": "Roblox Studio",
+    "Roblox Studio is already running": "Roblox Studio уже запущен",
+    "Install Roblox Studio?": "Установить Roblox Studio?",
+    "Studio runs in its Windows version through Wine. Mac O’ Blox downloads Wine, "
+    "DXVK and Studio, about 800 MB.":
+        "Studio запускается в Windows-версии через Wine. Mac O’ Blox скачает Wine, "
+        "DXVK и Studio, это около 800 МБ.",
+    "Install": "Установить",
+    "Could not start Roblox Studio": "Не удалось запустить Roblox Studio",
+    "Starting Roblox Studio…": "Запускаю Roblox Studio…",
+    "{label}: {done} of {total} MB": "{label}: {done} из {total} МБ",
+    "Unpacking Wine": "Распаковываю Wine",
+    "Preparing Wine": "Готовлю Wine",
+    "Roblox Studio: {done} of {total} MB": "Roblox Studio: {done} из {total} МБ",
+    "Unknown Studio package manifest format": "Неизвестный формат манифеста пакетов Studio",
+    "{name} failed its checksum": "{name} не прошёл проверку контрольной суммы",
     "Open last log": "Открыть последний лог",
     "Could not start: {error}": "Не удалось запустить: {error}",
     "Roblox exited with code {status}": "Roblox завершился с кодом {status}",

@@ -37,5 +37,6 @@ package() {
   done
   install -Dm644 packaging/xyz.narez.MacOBlox.desktop -t "$pkgdir/usr/share/applications"
   install -Dm644 packaging/macoblox-roblox-window.desktop -t "$pkgdir/usr/share/applications"
+  install -Dm644 packaging/xyz.narez.MacOBlox.Studio.desktop -t "$pkgdir/usr/share/applications"
   install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
 }

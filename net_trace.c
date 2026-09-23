@@ -12,7 +12,9 @@
  * sockets are checked with MSG_PEEK. Pending data without an event gets a
  * synthesized EVFILT_READ event, i.e. level-triggered behaviour for UDP.
  *
- * MACOBLOX_TRACE_UDP=1 also prints socket activity every two seconds. */
+ * MACOBLOX_TRACE_UDP=1 also prints socket activity every two seconds;
+ * MACOBLOX_TRACE_UDP=2 also logs the first 6000 UDP packets one by one (time,
+ * size, peer), to see where a handshake waits. */
 typedef unsigned int socklen_t;
 typedef long ssize_t;
 typedef unsigned long size_t;
@@ -54,9 +56,38 @@ static volatile int last_send_errno;
 static int trace_enabled(void) {
     if (enabled < 0) {
         const char *value = getenv("MACOBLOX_TRACE_UDP");
-        enabled = value && value[0] ? 1 : 0;
+        enabled = value && value[0] ? (value[0] == '2' ? 2 : 1) : 0;
     }
     return enabled;
+}
+
+static volatile long packets_logged;
+static void log_connected(const char *direction, int fd, long result, int error);
+static unsigned long long trace_start;
+
+/* One line per packet: ms since the first logged packet, direction, fd,
+ * bytes (or -errno) and the peer from a sockaddr_in. */
+static void log_packet(const char *direction, int fd, long result, int error, const void *peer) {
+    /* Only network packets: Roblox's threads wake each other with one-byte
+     * datagrams on a local socket pair, thousands per second. */
+    const unsigned char *family = peer;
+    if (trace_enabled() != 2 || !family || family[1] != 2 /* AF_INET */ ||
+        __sync_add_and_fetch(&packets_logged, 1) > 6000)
+        return;
+    unsigned long long now = mach_absolute_time();
+    if (!trace_start)
+        trace_start = now;
+    const unsigned char *address = peer;
+    char where[40] = "";
+    if (address && address[1] == 2 /* AF_INET */)
+        snprintf(where, sizeof where, " %u.%u.%u.%u:%u", address[4], address[5], address[6],
+                 address[7], (unsigned)(address[2] << 8 | address[3]));
+    char line[160];
+    int length = snprintf(line, sizeof line, "[MacOBlox PKT] %7.1fms %s fd=%d %ld%s\n",
+                          (now - trace_start) / 1e6, direction, fd,
+                          result < 0 ? -(long)error : result, where);
+    if (length > 0)
+        write(2, line, (size_t)length);
 }
 
 static int is_udp(int fd) {
@@ -264,6 +295,8 @@ static ssize_t traced_recvfrom(int fd, void *buffer, size_t size, int flags, voi
             ssize_t result = recvfrom(fd, buffer, size, flags | MSG_DONTWAIT, from, from_length);
             if (result >= 0 || *__error() != DARWIN_EAGAIN) {
                 int saved = *__error();
+                if (is_udp(fd))
+                    log_packet("recv", fd, result, saved, from);
                 count_receive(fd, result);
                 *__error() = saved;
                 return result;
@@ -276,6 +309,8 @@ static ssize_t traced_recvfrom(int fd, void *buffer, size_t size, int flags, voi
     }
     ssize_t result = recvfrom(fd, buffer, size, flags, from, from_length);
     int saved = *__error();
+    if (!(result < 0 && saved == DARWIN_EAGAIN) && trace_enabled() == 2 && is_udp(fd))
+        log_packet("recv", fd, result, saved, from);
     count_receive(fd, result);
     *__error() = saved;
     return result;
@@ -294,6 +329,12 @@ static ssize_t traced_recvmsg(int fd, void *message, int flags) {
             ssize_t result = recvmsg(fd, message, flags | MSG_DONTWAIT);
             if (result >= 0 || *__error() != DARWIN_EAGAIN) {
                 int saved = *__error();
+                if (trace_enabled() == 2 && is_udp(fd)) {
+                    if (*(void **)message)
+                        log_packet("recv", fd, result, saved, *(void **)message);
+                    else
+                        log_connected("recv", fd, result, saved);
+                }
                 count_receive(fd, result);
                 *__error() = saved;
                 return result;
@@ -306,6 +347,12 @@ static ssize_t traced_recvmsg(int fd, void *message, int flags) {
     }
     ssize_t result = recvmsg(fd, message, flags);
     int saved = *__error();
+    if (!(result < 0 && saved == DARWIN_EAGAIN) && trace_enabled() == 2 && is_udp(fd)) {
+        if (*(void **)message)
+            log_packet("recv", fd, result, saved, *(void **)message);
+        else
+            log_connected("recv", fd, result, saved);
+    }
     count_receive(fd, result);
     *__error() = saved;
     return result;
@@ -316,6 +363,8 @@ static ssize_t traced_sendto(int fd, const void *buffer, size_t size, int flags,
                              const void *to, socklen_t to_length) {
     ssize_t result = sendto(fd, buffer, size, flags, to, to_length);
     int saved = *__error();
+    if (trace_enabled() == 2 && is_udp(fd))
+        log_packet("send", fd, result, saved, to);
     count_send(fd, result);
     *__error() = saved;
     return result;
@@ -325,11 +374,53 @@ DYLD_INTERPOSE(traced_sendto, sendto)
 static ssize_t traced_sendmsg(int fd, const void *message, int flags) {
     ssize_t result = sendmsg(fd, message, flags);
     int saved = *__error();
+    if (trace_enabled() == 2 && is_udp(fd)) {
+        const void *name = message ? *(void *const *)message : 0;
+        if (name)
+            log_packet("send", fd, result, saved, name);
+        else
+            log_connected("send", fd, result, saved);
+    }
     count_send(fd, result);
     *__error() = saved;
     return result;
 }
 DYLD_INTERPOSE(traced_sendmsg, sendmsg)
+
+/* Connected UDP sockets (the QUIC transport) use send()/recv(), which do
+ * not go through sendto()/recvfrom(); log them with the connected peer. */
+extern ssize_t send(int, const void *, size_t, int);
+extern ssize_t recv(int, void *, size_t, int);
+extern int getpeername(int, void *, socklen_t *);
+
+static void log_connected(const char *direction, int fd, long result, int error) {
+    if (trace_enabled() != 2 || (result < 0 && error == DARWIN_EAGAIN) || !is_udp(fd))
+        return;
+    unsigned char peer[128];
+    socklen_t length = sizeof peer;
+    if (getpeername(fd, peer, &length) == 0)
+        log_packet(direction, fd, result, error, peer);
+}
+
+static ssize_t traced_send(int fd, const void *buffer, size_t size, int flags) {
+    ssize_t result = send(fd, buffer, size, flags);
+    int saved = *__error();
+    log_connected("send", fd, result, saved);
+    count_send(fd, result);
+    *__error() = saved;
+    return result;
+}
+DYLD_INTERPOSE(traced_send, send)
+
+static ssize_t traced_recv(int fd, void *buffer, size_t size, int flags) {
+    ssize_t result = recv(fd, buffer, size, flags);
+    int saved = *__error();
+    log_connected("recv", fd, result, saved);
+    count_receive(fd, result);
+    *__error() = saved;
+    return result;
+}
+DYLD_INTERPOSE(traced_recv, recv)
 
 static int traced_poll(void *fds, unsigned int count, int timeout) {
     if (trace_enabled())

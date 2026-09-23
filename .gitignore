@@ -4,6 +4,7 @@
 /downloads/
 /logs/
 /build/
+/studio/
 *.dylib
 __pycache__/
 

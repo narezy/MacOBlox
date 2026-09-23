@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Roblox Studio (Mac O’ Blox)
+Comment=Roblox Studio through Wine
+Comment[ru]=Roblox Studio через Wine
+Exec=macoblox --studio %u
+Icon=macoblox
+Terminal=false
+Categories=Development;
+MimeType=x-scheme-handler/roblox-studio;x-scheme-handler/roblox-studio-auth;application/x-roblox-place;
+StartupWMClass=robloxstudiobeta.exe

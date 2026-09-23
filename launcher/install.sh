@@ -31,6 +31,27 @@ Keywords=roblox;darling;
 StartupNotify=true
 DESKTOP
 
+# Roblox Studio (Windows version through Wine), also the handler of the
+# roblox-studio: links and of roblox-studio-auth: that signs Studio in.
+cat > "$data_home/applications/xyz.narez.MacOBlox.Studio.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Roblox Studio (Mac O’ Blox)
+Comment=Roblox Studio through Wine
+Comment[ru]=Roblox Studio через Wine
+Exec=$launcher_dir/macoblox-launcher --studio %u
+Icon=macoblox
+Terminal=false
+Categories=Development;
+MimeType=x-scheme-handler/roblox-studio;x-scheme-handler/roblox-studio-auth;application/x-roblox-place;
+StartupWMClass=robloxstudiobeta.exe
+DESKTOP
+if command -v xdg-mime >/dev/null; then
+  for type in x-scheme-handler/roblox-studio x-scheme-handler/roblox-studio-auth; do
+    xdg-mime default xyz.narez.MacOBlox.Studio.desktop "$type"
+  done
+fi
+
 # Old app ID; removed after the new entry exists so menus that rescan on the
 # first change (noctalia) do not miss it.
 rm -f "$data_home/applications/org.macoblox.Launcher.desktop"
