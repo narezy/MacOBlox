@@ -123,6 +123,8 @@ RU = {
     "Community": "Сообщество",
     "Author": "Автор",
     "{user} on Roblox": "{user} в Roblox",
+    "Made with Claude Opus 5.5": "Сделано с Claude Opus 5.5",
+    "Anthropic's AI wrote the code together with the author": "ИИ от Anthropic писал код вместе с автором",
     "Support the project": "Поддержать проект",
     "Mac O’ Blox is free. If it helped you, you can thank the author.":
         "Mac O’ Blox бесплатный. Если он тебе пригодился, можно поблагодарить автора.",

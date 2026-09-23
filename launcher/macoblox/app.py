@@ -515,6 +515,11 @@ class InfoPage(Adw.PreferencesPage):
         profile.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
         profile.connect("activated", lambda *_args: _open_uri(window, author.PROFILE_URL))
         made_by.add(profile)
+        claude = Adw.ActionRow(title=_("Made with Claude Opus 5.5"), activatable=True,
+                               subtitle=_("Anthropic's AI wrote the code together with the author"))
+        claude.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
+        claude.connect("activated", lambda *_args: _open_uri(window, "https://www.anthropic.com/claude"))
+        made_by.add(claude)
         self.add(made_by)
 
         support = Adw.PreferencesGroup(

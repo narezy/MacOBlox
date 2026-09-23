@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Roblox (Mac O’ Blox)
+Exec=macoblox
+Icon=macoblox
+NoDisplay=true
+StartupWMClass=RobloxPlayer

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Mac O’ Blox
+Comment=Run the macOS Roblox client on Linux through Darling
+Comment[ru]=Запуск клиента Roblox для macOS на Linux через Darling
+GenericName=Roblox launcher
+GenericName[ru]=Лаунчер Roblox
+Exec=macoblox
+Icon=macoblox
+Terminal=false
+Categories=Game;
+Keywords=roblox;darling;
+StartupNotify=true

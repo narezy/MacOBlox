@@ -18,19 +18,24 @@ from pathlib import Path
 from .i18n import _
 
 PROJECT = Path(__file__).resolve().parents[2]
-APP_BUNDLE = PROJECT / "RobloxPlayer.app"
-SHIM = PROJECT / "build" / "libMacOBloxShims.dylib"
+# Everything the launcher writes: the project folder for a git checkout, the
+# user's data folder when the sources are installed read-only (a package).
+DATA_DIR = (PROJECT if os.access(PROJECT, os.W_OK) else
+            Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "macoblox")
+APP_BUNDLE = DATA_DIR / "RobloxPlayer.app"
+BUILD_DIR = DATA_DIR / "build"
+SHIM = BUILD_DIR / "libMacOBloxShims.dylib"
 # Frameworks RobloxPlayer links that Darling lacks; stubs from frameworks/.
 FRAMEWORKS = ["CoreML", "CoreHaptics", "DeviceCheck"]
-FRAMEWORKS_BUILD = PROJECT / "build" / "frameworks"
+FRAMEWORKS_BUILD = BUILD_DIR / "frameworks"
 DARLING_SYSROOT = Path("/usr/libexec/darling")
 DARLING_PREFIX = Path.home() / ".darling"
 NATIVE_LIBS = ["libavcodec", "libavformat", "libavutil", "libswresample"]
-NATIVE_BUILD = PROJECT / "build" / "native"
+NATIVE_BUILD = BUILD_DIR / "native"
 BUILD_SCRIPT = PROJECT / "build_debug_shim.sh"
-LOGS = PROJECT / "logs"
-BACKUPS = PROJECT / "backups"
-DOWNLOADS = PROJECT / "downloads"
+LOGS = DATA_DIR / "logs"
+BACKUPS = DATA_DIR / "backups"
+DOWNLOADS = DATA_DIR / "downloads"
 ICONS = PROJECT / "branding" / "icons"
 FAST_FLAGS = APP_BUNDLE / "Contents" / "MacOS" / "ClientSettings" / "ClientAppSettings.json"
 
@@ -140,7 +145,7 @@ def latest_version():
 def update_roblox(upload, progress=None):
     """Download the official macOS client and swap it in, keeping fast flags.
     The previous bundle is moved to backups/. progress(fraction, text)."""
-    DOWNLOADS.mkdir(exist_ok=True)
+    DOWNLOADS.mkdir(parents=True, exist_ok=True)
     archive = DOWNLOADS / f"{upload}-RobloxPlayer.zip"
     request = urllib.request.Request(DOWNLOAD_URL.format(upload=upload),
                                      headers={"User-Agent": "MacOBlox"})
@@ -165,7 +170,7 @@ def update_roblox(upload, progress=None):
         raise RuntimeError(_("The archive has no RobloxPlayer.app"))
     flags = load_fast_flags()
     old_version = installed_version() or "unknown"
-    BACKUPS.mkdir(exist_ok=True)
+    BACKUPS.mkdir(parents=True, exist_ok=True)
     backup = BACKUPS / f"RobloxPlayer-{old_version}.app"
     if backup.exists():
         shutil.rmtree(backup)
@@ -264,7 +269,8 @@ def cleanup_logs(keep):
 
 
 def build_shim():
-    result = subprocess.run([str(BUILD_SCRIPT)], capture_output=True, text=True)
+    result = subprocess.run([str(BUILD_SCRIPT)], capture_output=True, text=True,
+                            env=dict(os.environ, MACOBLOX_BUILD_DIR=str(BUILD_DIR)))
     return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
@@ -563,12 +569,12 @@ class RobloxSession:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
         install_frameworks(env)
         install_ffmpeg_bridges(env)
-        LOGS.mkdir(exist_ok=True)
+        LOGS.mkdir(parents=True, exist_ok=True)
         cleanup_logs(int(self.settings.get("keep_logs", 30)) - 1)
         self.log_path = LOGS / time.strftime("launch-%Y%m%d-%H%M%S.log")
         log = open(self.log_path, "wb")
         command = ["darling", "shell", "/bin/bash", "-c", LAUNCH_SCRIPT, "macoblox",
-                   f"/Volumes/SystemRoot{PROJECT}", f"/Volumes/SystemRoot{SHIM.parent}",
+                   f"/Volumes/SystemRoot{DATA_DIR}", f"/Volumes/SystemRoot{SHIM.parent}",
                    *self.shim_variables()]
         self.process = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
                                         stdout=log, stderr=subprocess.STDOUT,
