@@ -2987,12 +2987,18 @@ unsigned char CGEventSourceKeyState(int state_id, unsigned short key) {
     return key < 128 ? macoblox_key_down[key] : 0;
 }
 
+static int macoblox_trace_keys_enabled(void);
 static void (*orig_app_send_event)(id, SEL, id) = 0;
 static void hooked_app_send_event(id self, SEL cmd, id event) {
     if (event) {
         unsigned long type = ((unsigned long (*)(id, SEL))objc_msgSend)(
             event, sel_registerName("type"));
         macoblox_track_key_event(event, type);
+        if ((type == 10 || type == 11) && macoblox_trace_keys_enabled()) {
+            write_str(type == 10 ? "[MacOBlox Keys] game keyDown code=" : "[MacOBlox Keys] game keyUp   code=");
+            print_num(((unsigned short (*)(id, SEL))objc_msgSend)(event, sel_registerName("keyCode")));
+            write_str(((signed char (*)(id, SEL))objc_msgSend)(event, sel_registerName("isARepeat")) ? " repeat\n" : "\n");
+        }
         if ((type == 5 || type == 6 || type == 7 || type == 27) &&
             macoblox_filter_locked_motion(event))
             return;
@@ -3347,6 +3353,177 @@ static id hooked_pixel_format_init(id self, SEL cmd, const unsigned int* attribu
     return result;
 }
 
+// Darling's event queue (NSDisplay) fixed to behave like macOS.
+//
+// -nextEventMatchingMask:untilDate:inMode:dequeue: removed every queued
+// event that did not match the mask while looking for one that did. macOS
+// leaves them queued. When the game asked for mouse events during a camera
+// drag, key releases waiting in front were thrown away: keys stuck ("W
+// stayed pressed") or presses were lost. -discardEventsMatchingMask:
+// beforeEvent: tested the reference event's type instead of each queued
+// event's. The queue (an NSMutableArray) is also shared with the rendering
+// thread (shared_current_display), so all three take a lock.
+static volatile int macoblox_event_queue_lock;
+static void macoblox_lock_event_queue(void) {
+    while (__sync_lock_test_and_set(&macoblox_event_queue_lock, 1)) {}
+}
+static void macoblox_unlock_event_queue(void) {
+    __sync_lock_release(&macoblox_event_queue_lock);
+}
+static id macoblox_event_queue(id display) {
+    static Ivar queue_ivar;
+    if (!queue_ivar)
+        queue_ivar = class_getInstanceVariable(objc_getClass("NSDisplay"), "_eventQueue");
+    return queue_ivar ? *(id*)((char*)display + ivar_getOffset(queue_ivar)) : (id)0;
+}
+static unsigned long macoblox_event_type(id event) {
+    return ((unsigned long (*)(id, SEL))objc_msgSend)(event, sel_registerName("type"));
+}
+static int macoblox_mask_matches(unsigned long long mask, unsigned long type) {
+    return type < 64 && (mask & (1ULL << type));
+}
+
+static id hooked_display_next_event(id self, SEL cmd, unsigned long long mask, id until, id mode,
+                                    signed char dequeue) {
+    (void)cmd;
+    id queue = macoblox_event_queue(self);
+    SEL count = sel_registerName("count"), object_at = sel_registerName("objectAtIndex:");
+    if (queue && ((unsigned long (*)(id, SEL))objc_msgSend)(queue, count))
+        until = ((id (*)(id, SEL))objc_msgSend)((id)objc_getClass("NSDate"), sel_registerName("date"));
+    id run_loop = ((id (*)(id, SEL))objc_msgSend)((id)objc_getClass("NSRunLoop"),
+                                                  sel_registerName("currentRunLoop"));
+    ((signed char (*)(id, SEL, id, id))objc_msgSend)(run_loop, sel_registerName("runMode:beforeDate:"),
+                                                     mode, until);
+    id result = (id)0;
+    if (queue) {
+        macoblox_lock_event_queue();
+        unsigned long total = ((unsigned long (*)(id, SEL))objc_msgSend)(queue, count);
+        for (unsigned long index = 0; index < total; index++) {
+            id event = ((id (*)(id, SEL, unsigned long))objc_msgSend)(queue, object_at, index);
+            if (!macoblox_mask_matches(mask, macoblox_event_type(event)))
+                continue;
+            result = ((id (*)(id, SEL))objc_msgSend)(event, sel_registerName("retain"));
+            if (dequeue)
+                ((void (*)(id, SEL, unsigned long))objc_msgSend)(
+                    queue, sel_registerName("removeObjectAtIndex:"), index);
+            break;
+        }
+        /* Nobody may ever ask for some event types; keep the queue bounded. */
+        while (((unsigned long (*)(id, SEL))objc_msgSend)(queue, count) > 4096)
+            ((void (*)(id, SEL, unsigned long))objc_msgSend)(queue, sel_registerName("removeObjectAtIndex:"), 0);
+        macoblox_unlock_event_queue();
+        if (result)
+            result = ((id (*)(id, SEL))objc_msgSend)(result, sel_registerName("autorelease"));
+    }
+    if (!result) {
+        /* As Darling: an NSAppKitSystem event when nothing matches. */
+        id event = ((id (*)(id, SEL))objc_msgSend)((id)objc_getClass("NSEvent"), sel_registerName("alloc"));
+        event = ((id (*)(id, SEL, unsigned long, MacOBloxPoint, unsigned long, id))objc_msgSend)(
+            event, sel_registerName("initWithType:location:modifierFlags:window:"), 13 /* NSAppKitSystem */,
+            (MacOBloxPoint){0, 0}, 0, (id)0);
+        result = ((id (*)(id, SEL))objc_msgSend)(event, sel_registerName("autorelease"));
+    }
+    return result;
+}
+
+static void hooked_display_post_event(id self, SEL cmd, id event, signed char at_start) {
+    (void)cmd;
+    id queue = macoblox_event_queue(self);
+    if (!queue || !event)
+        return;
+    macoblox_lock_event_queue();
+    if (at_start)
+        ((void (*)(id, SEL, id, unsigned long))objc_msgSend)(queue, sel_registerName("insertObject:atIndex:"),
+                                                             event, 0);
+    else
+        ((void (*)(id, SEL, id))objc_msgSend)(queue, sel_registerName("addObject:"), event);
+    macoblox_unlock_event_queue();
+}
+
+static void hooked_display_discard_events(id self, SEL cmd, unsigned long long mask, id before) {
+    (void)cmd;
+    id queue = macoblox_event_queue(self);
+    if (!queue)
+        return;
+    macoblox_lock_event_queue();
+    unsigned long total = ((unsigned long (*)(id, SEL))objc_msgSend)(queue, sel_registerName("count"));
+    unsigned long stop = total;
+    for (unsigned long index = 0; index < total; index++)
+        if (((id (*)(id, SEL, unsigned long))objc_msgSend)(queue, sel_registerName("objectAtIndex:"), index) == before) {
+            stop = index;
+            break;
+        }
+    for (unsigned long index = stop; index-- > 0;) {
+        id event = ((id (*)(id, SEL, unsigned long))objc_msgSend)(queue, sel_registerName("objectAtIndex:"), index);
+        if (macoblox_mask_matches(mask, macoblox_event_type(event)))
+            ((void (*)(id, SEL, unsigned long))objc_msgSend)(queue, sel_registerName("removeObjectAtIndex:"), index);
+    }
+    macoblox_unlock_event_queue();
+}
+
+// X11 events as Darling's AppKit receives them (-[X11Display postXEvent:]).
+//
+// Motion compression: a 1000 Hz mouse sends a motion event per pixel, and
+// Darling turns every one into an NSEvent the game handles. It could not
+// keep up; a pointer warp during mouse lock reached the game 180-340 events
+// late and the camera lagged and jumped (reported on an RTX 3050 laptop).
+// A motion event is skipped when the next queued event is a motion event
+// of the same window and buttons: Darling computes deltas from positions,
+// so the next one carries the skipped movement. Jumps over 48 px (our
+// warps) are never merged, the lock logic needs to see them alone.
+// MACOBLOX_NO_MOTION_COMPRESSION=1 turns this off.
+// MACOBLOX_TRACE_KEYS=1 logs X key presses/releases here and the key events
+// the game gets (sendEvent), to find lost or stuck keys.
+static void (*orig_post_x_event)(id, SEL, void*);
+static int macoblox_trace_keys_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char* value = getenv("MACOBLOX_TRACE_KEYS");
+        enabled = value && value[0] == '1';
+    }
+    return enabled;
+}
+static void hooked_post_x_event(id self, SEL cmd, void* event) {
+    int type = *(int*)event;
+    if (type == 6 /* MotionNotify */) {
+        static int compression = -1;
+        static int (*pending)(void*);
+        static int (*peek)(void*, void*);
+        if (compression < 0) {
+            const char* value = getenv("MACOBLOX_NO_MOTION_COMPRESSION");
+            pending = (int (*)(void*))dlsym(RTLD_DEFAULT, "XPending");
+            peek = (int (*)(void*, void*))dlsym(RTLD_DEFAULT, "XPeekEvent");
+            compression = !(value && value[0] == '1') && pending && peek;
+        }
+        Ivar display_ivar = compression ? class_getInstanceVariable(object_getClass(self), "_display") : 0;
+        void* display = display_ivar ? *(void**)((char*)self + ivar_getOffset(display_ivar)) : 0;
+        if (display && pending(display) > 0) {
+            unsigned char next[192];
+            peek(display, next);
+            /* XMotionEvent: window at 32, x/y at 64/68, state at 80 */
+            int dx = *(int*)(next + 64) - *(int*)((char*)event + 64);
+            int dy = *(int*)(next + 68) - *(int*)((char*)event + 68);
+            if (*(int*)next == 6 &&
+                *(unsigned long*)(next + 32) == *(unsigned long*)((char*)event + 32) &&
+                *(unsigned int*)(next + 80) == *(unsigned int*)((char*)event + 80) &&
+                dx <= 48 && dx >= -48 && dy <= 48 && dy >= -48)
+                return;
+        }
+    } else if ((type == 2 || type == 3) && macoblox_trace_keys_enabled()) {
+        /* XKeyEvent: time at 56, keycode at 84 */
+        write_str(type == 2 ? "[MacOBlox Keys] X press   keycode=" : "[MacOBlox Keys] X release keycode=");
+        print_num(*(unsigned int*)((char*)event + 84));
+        write_str(" time=");
+        print_num((long long)*(unsigned long*)((char*)event + 56));
+        /* When Darling handles it, in the same milliseconds scale: if the
+         * gap to `time` grows, events wait inside Mac O' Blox. */
+        write_str(" handled=");
+        print_num((long long)(mach_absolute_time() / 1000000ULL));
+        write_str("\n");
+    }
+    orig_post_x_event(self, cmd, event);
+}
+
 // OpenGL subwindows get the screen's visual (gl_profile.c explains why).
 extern unsigned long macoblox_replace_gl_subwindow(void* display, unsigned long parent, unsigned long old);
 static id (*orig_x11_subwindow_init)(id, SEL, id, MacOBloxRect);
@@ -3372,6 +3549,31 @@ static id hooked_x11_subwindow_init(id self, SEL cmd, id parent, MacOBloxRect fr
 static void macoblox_install_late_hooks(void) {
     static volatile int cursor_hooked;
     static volatile int window_events_hooked;
+    static volatile int event_queue_hooked;
+    Class display_class = objc_getClass("NSDisplay");
+    if (display_class && __sync_bool_compare_and_swap(&event_queue_hooked, 0, 1)) {
+        Method next = class_getInstanceMethod(display_class,
+            sel_registerName("nextEventMatchingMask:untilDate:inMode:dequeue:"));
+        Method post = class_getInstanceMethod(display_class, sel_registerName("postEvent:atStart:"));
+        Method discard = class_getInstanceMethod(display_class,
+            sel_registerName("discardEventsMatchingMask:beforeEvent:"));
+        if (next && post && discard && class_getInstanceVariable(display_class, "_eventQueue")) {
+            method_setImplementation(next, (IMP)hooked_display_next_event);
+            method_setImplementation(post, (IMP)hooked_display_post_event);
+            method_setImplementation(discard, (IMP)hooked_display_discard_events);
+            write_str("[MacOBlox] Event queue keeps non-matching events (NSDisplay fix)\n");
+        }
+    }
+    static volatile int x_events_hooked;
+    Class x11_display_class = objc_getClass("X11Display");
+    if (x11_display_class && __sync_bool_compare_and_swap(&x_events_hooked, 0, 1)) {
+        Method method = class_getInstanceMethod(x11_display_class, sel_registerName("postXEvent:"));
+        if (method) {
+            orig_post_x_event = (void (*)(id, SEL, void*))method_getImplementation(method);
+            method_setImplementation(method, (IMP)hooked_post_x_event);
+            write_str("[MacOBlox] Hooked X11Display postXEvent: (motion compression)\n");
+        }
+    }
     static volatile int subwindow_hooked;
     Class x11_subwindow_class = objc_getClass("X11SubWindow");
     if (x11_subwindow_class && __sync_bool_compare_and_swap(&subwindow_hooked, 0, 1)) {

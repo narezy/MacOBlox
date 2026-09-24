@@ -139,6 +139,7 @@ RU = {
     "Mouse event tracing": "Трассировка событий мыши",
     "OpenGL tracing": "Трассировка OpenGL",
     "Frame rate in the log": "FPS в логе",
+    "Keyboard tracing": "Трассировка клавиатуры",
     "Open logs folder": "Открыть папку с логами",
     "Rebuild shim": "Пересобрать шим",
     "Building the shim…": "Собираю шим…",

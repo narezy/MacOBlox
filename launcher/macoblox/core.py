@@ -72,6 +72,7 @@ DEFAULT_SETTINGS = {
     "trace_events": False,
     "trace_gl": False,
     "fps_log": False,
+    "trace_keys": False,
     "keep_logs": 30,
 }
 
@@ -83,6 +84,7 @@ TRACE_ENV = {
     "trace_events": "MACOBLOX_TRACE_EVENTS",
     "trace_gl": "MACOBLOX_TRACE_GL",
     "fps_log": "MACOBLOX_FPS_LOG",
+    "trace_keys": "MACOBLOX_TRACE_KEYS",
 }
 
 
