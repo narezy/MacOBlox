@@ -4,6 +4,7 @@ typedef struct objc_selector *SEL;
 typedef struct objc_method *Method;
 typedef void (*IMP)(void);
 
+extern unsigned long long mach_absolute_time(void);
 extern Class objc_getClass(const char *name);
 extern SEL sel_registerName(const char *str);
 extern Method class_getInstanceMethod(Class cls, SEL name);

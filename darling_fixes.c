@@ -90,8 +90,8 @@ DYLD_INTERPOSE(macoblox_pthread_create, pthread_create)
 /* Condition variables: the same lost psynch wakeups hit pthread_cond_wait.
  * Leaving a game, the network thread waited 9.4 s for a signal that had
  * already been sent (until its own ~10 s timeout). POSIX allows spurious
- * wakeups and correct callers re-check their predicate, so waits are cut
- * into slices that return as spurious wakeups. Every wait is an RPC to
+ * wakeups and correct callers re-check their predicate, so timed waits are
+ * cut into slices that return as spurious wakeups. Every wait is an RPC to
  * darlingserver, so the slice starts at 50 ms and doubles up to 1 s while
  * the same thread keeps waiting on the same condition (flat 50 ms slices
  * cost darlingserver half a core). MACOBLOX_NATIVE_COND=1 turns this off. */
@@ -161,15 +161,12 @@ static struct darwin_timespec slice_deadline_ns(long length) {
     return deadline;
 }
 
-static int macoblox_pthread_cond_wait(void *cond, void *mutex) {
-    if (native_cond())
-        return pthread_cond_wait(cond, mutex);
-    struct darwin_timespec deadline = slice_deadline_ns(next_slice(cond));
-    int result = pthread_cond_timedwait(cond, mutex, &deadline);
-    wait_finished(result == DARWIN_ETIMEDOUT);
-    return result == DARWIN_ETIMEDOUT ? 0 : result;
-}
-DYLD_INTERPOSE(macoblox_pthread_cond_wait, pthread_cond_wait)
+/* pthread_cond_wait (no timeout) is left alone: code waiting without a
+ * timeout is the most likely to skip re-checking its condition, and a
+ * spurious wakeup there looked like a use-after-free (a garbage block on
+ * the main dispatch queue crashed the client on the home page). Waits with
+ * a timeout must cope with waking early anyway; the 9.4 s stall when
+ * leaving a game was one of those. */
 
 static int macoblox_pthread_cond_timedwait(void *cond, void *mutex, const struct darwin_timespec *abstime) {
     if (native_cond() || !abstime)
