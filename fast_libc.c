@@ -116,6 +116,12 @@ DYLD_INTERPOSE(fast_bzero, bzero)
 
 __attribute__((no_builtin)) static int fast_memcmp(const void *a, const void *b, size_t n) {
     const u8 *x = a, *y = b;
+    while (n >= 16) {
+        v16 p = *(const v16 *)x, q = *(const v16 *)y;
+        if (__builtin_ia32_pmovmskb128((v16)(p == q)) != 0xffff)
+            break;
+        x += 16; y += 16; n -= 16;
+    }
     while (n >= 8 && *(const u64u *)x == *(const u64u *)y) {
         x += 8; y += 8; n -= 8;
     }

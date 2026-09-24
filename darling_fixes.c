@@ -204,3 +204,18 @@ static int macoblox_pthread_cond_timedwait_relative_np(void *cond, void *mutex,
     return result == DARWIN_ETIMEDOUT ? 0 : result;
 }
 DYLD_INTERPOSE(macoblox_pthread_cond_timedwait_relative_np, pthread_cond_timedwait_relative_np)
+
+/* _availability_version_check (libxpc) backs every `@available(macOS ...)`
+ * check. Darling's is a stub that returns false and logs "not implemented"
+ * through os_log on every call; Roblox checks availability many times per
+ * frame, which cost ~4% of the main thread in logging. Same answer, no log.
+ * (Answering truthfully could enable code paths for APIs Darling lacks.) */
+typedef struct { unsigned int platform, version; } darwin_build_version_t;
+extern _Bool _availability_version_check(unsigned long, darwin_build_version_t *);
+
+static _Bool macoblox_availability_version_check(unsigned long count, darwin_build_version_t *versions) {
+    (void)count;
+    (void)versions;
+    return 0;
+}
+DYLD_INTERPOSE(macoblox_availability_version_check, _availability_version_check)
