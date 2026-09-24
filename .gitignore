@@ -24,3 +24,4 @@ __pycache__/
 /flatpak/repo/
 /flatpak/build.log
 /flatpak/.flatpak-builder/
+/flatpak/*.flatpak
