@@ -430,6 +430,9 @@ static int macoblox_CGLContextMakeCurrentAndAttachToWindow(void* context,
 DYLD_INTERPOSE(macoblox_CGLContextMakeCurrentAndAttachToWindow,
                CGLContextMakeCurrentAndAttachToWindow);
 
+// Frame presentation (gl_profile.c): vsync off unless MACOBLOX_VSYNC=1,
+// and an FPS line every 5 s with MACOBLOX_FPS_LOG=1.
+extern void macoblox_frame_presenting(void* cgl_context);
 static volatile long macoblox_cgl_flush_drawable_count;
 static int macoblox_CGLFlushDrawable(void* context) {
     if (macoblox_trace_cgl_enabled() &&
@@ -444,6 +447,7 @@ static int macoblox_CGLFlushDrawable(void* context) {
         print_hex((unsigned long long)macoblox_cgl_egl_surface(context));
         write_str("\n");
     }
+    macoblox_frame_presenting(context);
     return CGLFlushDrawable(context);
 }
 DYLD_INTERPOSE(macoblox_CGLFlushDrawable, CGLFlushDrawable);

@@ -297,3 +297,57 @@ unsigned long macoblox_replace_gl_subwindow(void *display, unsigned long parent,
     write(2, "[MacOBlox GL] GL subwindow uses the screen visual\n", 51);
     return window;
 }
+
+/* Frame presentation.
+ *
+ * Darling presents with eglSwapBuffers at swap interval 1 (vsync). A frame
+ * that misses a refresh then waits for the next one, so a game that needs
+ * a little more than 16.7 ms drops straight from 60 to 30 FPS; Roblox's own
+ * stats showed frames of 30 ms with 9 ms of work and 20 ms idle. The swap
+ * interval is set to 0 before the first frame of each context; Roblox caps
+ * the frame rate itself (DFIntTaskSchedulerTargetFps) and the compositor
+ * keeps the picture tear-free. MACOBLOX_VSYNC=1 keeps vsync.
+ * MACOBLOX_FPS_LOG=1 prints the presented frame rate every 5 s. */
+extern unsigned int eglSwapInterval(void *, int);
+extern void *eglGetCurrentDisplay(void);
+extern unsigned long long mach_absolute_time(void);
+
+void macoblox_frame_presenting(void *cgl_context) {
+    static void *configured[8];
+    static int vsync = -1, fps_log = -1;
+    if (vsync < 0) {
+        const char *value = getenv("MACOBLOX_VSYNC");
+        vsync = value && value[0] == '1';
+        value = getenv("MACOBLOX_FPS_LOG");
+        fps_log = value && value[0] == '1';
+    }
+    if (!vsync) {
+        int known = 0;
+        for (int i = 0; i < 8; i++)
+            if (configured[i] == cgl_context) known = 1;
+        if (!known) {
+            void *display = eglGetCurrentDisplay();
+            if (display && eglSwapInterval(display, 0)) {
+                for (int i = 0; i < 8; i++)
+                    if (!configured[i]) { configured[i] = cgl_context; break; }
+                write(2, "[MacOBlox GL] vsync off (swap interval 0)\n", 42);
+            }
+        }
+    }
+    if (fps_log) {
+        static unsigned long long window_start;
+        static long frames;
+        unsigned long long now = mach_absolute_time();
+        if (!window_start)
+            window_start = now;
+        frames++;
+        if (now - window_start >= 5000000000ULL) {
+            char line[64];
+            int length = snprintf(line, sizeof line, "[MacOBlox FPS] %.1f\n",
+                                  frames * 1e9 / (double)(now - window_start));
+            if (length > 0) write(2, line, (unsigned long)length);
+            frames = 0;
+            window_start = now;
+        }
+    }
+}
