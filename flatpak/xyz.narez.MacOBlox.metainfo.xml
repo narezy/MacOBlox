@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>xyz.narez.MacOBlox</id>
+  <name>Mac O’ Blox</name>
+  <summary>Play Roblox on Linux with the macOS client</summary>
+  <summary xml:lang="ru">Roblox на Linux через клиент для macOS</summary>
+  <developer id="xyz.narez">
+    <name>Narezany</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      Mac O’ Blox runs the official macOS Roblox client on Linux through Darling,
+      with fixes for graphics, input, sound and performance. The launcher keeps
+      the client up to date and has settings for fast flags, DNS and diagnostics.
+    </p>
+    <p xml:lang="ru">
+      Mac O’ Blox запускает официальный клиент Roblox для macOS на Linux через Darling
+      и чинит графику, ввод, звук и производительность. Лаунчер сам обновляет клиент,
+      в нём есть настройки фастфлагов, DNS и диагностика.
+    </p>
+    <p>Mac O’ Blox is not affiliated with Roblox Corporation.</p>
+    <p xml:lang="ru">Mac O’ Blox не связан с Roblox Corporation.</p>
+  </description>
+  <launchable type="desktop-id">xyz.narez.MacOBlox.desktop</launchable>
+  <url type="homepage">https://github.com/narezy/MacOBlox</url>
+  <url type="bugtracker">https://github.com/narezy/MacOBlox/issues</url>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">moderate</content_attribute>
+    <content_attribute id="money-purchasing">intense</content_attribute>
+  </content_rating>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.13" date="2026-09-24"/>
+  </releases>
+</component>

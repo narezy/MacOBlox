@@ -1,0 +1,75 @@
+app-id: xyz.narez.MacOBlox
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.llvm22
+command: macoblox
+finish-args:
+  - --share=network
+  - --share=ipc
+  # Darling draws through X11 (Xwayland on Wayland); the launcher is GTK.
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  # Roblox asks the GPU driver for VRAM through sysfs (host_vram_bytes).
+  - --filesystem=/sys/class/drm:ro
+  - --talk-name=org.freedesktop.Notifications
+modules:
+  - name: darling
+    buildsystem: simple
+    build-commands:
+      - sh install-darling.sh debs.zip
+    sources:
+      - type: file
+        url: https://github.com/darlinghq/darling/releases/download/v0.1.20260608/debs_20260608.zip
+        sha256: 27469ef3932da2e91dd7fb34b70e3628a3e54b7af9fb5480051f44af35eca1fd
+        dest-filename: debs.zip
+      - type: file
+        path: install-darling.sh
+
+  - name: macoblox
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/llvm22/bin
+      prepend-ld-library-path: /usr/lib/sdk/llvm22/lib
+    build-commands:
+      # The shim and the stub frameworks, against Darling's macOS root.
+      - MACOBLOX_BUILD_DIR=/app/lib/macoblox/shim DARLING_SYSROOT=/app/libexec/darling ./build_debug_shim.sh
+      - rm -f /app/lib/macoblox/shim/fast_libc.o
+      # Darling without root (see flatpak/darling-noroot.c).
+      - gcc -shared -fPIC -O2 -o /app/lib/macoblox/darling-noroot.so flatpak/darling-noroot.c -ldl
+      - clang -target x86_64-apple-darwin -fuse-ld=lld -isysroot /app/libexec/darling -mmacosx-version-min=11.0
+        -dynamiclib -O2 -o /app/lib/macoblox/launchd_pid1.dylib flatpak/launchd_pid1.c
+      - install -d /app/share/macoblox
+      - cp -r launcher branding /app/share/macoblox/
+      - rm -f /app/share/macoblox/launcher/install.sh
+      - python3 -m compileall -q -d /app/share/macoblox/launcher /app/share/macoblox/launcher
+      - install -Dm755 flatpak/macoblox.sh /app/bin/macoblox
+      - for size in 16 22 24 32 48 64 128 256 512; do install -Dm644 branding/icons/macoblox-$size.png
+        /app/share/icons/hicolor/${size}x${size}/apps/xyz.narez.MacOBlox.png; done
+      - install -d /app/share/applications
+      - sed 's/^Icon=.*/Icon=xyz.narez.MacOBlox/' packaging/xyz.narez.MacOBlox.desktop
+        > /app/share/applications/xyz.narez.MacOBlox.desktop
+      # The Roblox window's own entry, so docks show its icon.
+      - sed 's/^Icon=.*/Icon=xyz.narez.MacOBlox/' packaging/macoblox-roblox-window.desktop
+        > /app/share/applications/xyz.narez.MacOBlox.RobloxWindow.desktop
+      - install -Dm644 flatpak/xyz.narez.MacOBlox.metainfo.xml -t /app/share/metainfo
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - RobloxPlayer.app
+          - build
+          - backups
+          - downloads
+          - logs
+          - work
+          - studio
+          - ffmpeg6
+          - ffmpeg_compat
+          - frameworks_backup
+          - .flatpak-builder
+          - flatpak/build-dir
+          - flatpak/repo

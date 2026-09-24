@@ -144,6 +144,7 @@ RU = {
     "Rebuild shim": "Пересобрать шим",
     "Building the shim…": "Собираю шим…",
     "Shim built": "Шим собран",
+    "The shim comes built with this package": "Шим в этом пакете уже собран",
     "Build failed, details in the terminal": "Сборка не удалась, подробности в терминале",
     "Could not build the shim:\n{output}": "Не удалось собрать шим:\n{output}",
     "Restart Darling": "Перезапустить Darling",

@@ -18,3 +18,9 @@ __pycache__/
 
 # Roblox's own icon, only the source of the tilt
 /branding/source/Roblox_player_icon_black.*
+
+# Flatpak builds
+/flatpak/build-dir/
+/flatpak/repo/
+/flatpak/build.log
+/flatpak/.flatpak-builder/

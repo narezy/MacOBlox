@@ -116,10 +116,20 @@ how to open the `roblox-studio-auth` link, choose **Roblox Studio (Mac O’ Blox
 </details>
 
 <details>
-<summary>Why not Flatpak?</summary>
+<summary>Flatpak (testing)</summary>
 
-Darling needs its own mount and process namespaces, and the Flatpak sandbox
-forbids creating them.
+Darling normally needs root for its own mount and process namespaces, which a
+Flatpak cannot create. The Flatpak runs Darling without root instead (see
+[flatpak/darling-noroot.c](flatpak/darling-noroot.c)) and brings Darling and a
+built shim along, so nothing has to be installed on the system. Build it:
+
+```bash
+flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//50 org.freedesktop.Sdk.Extension.llvm22//25.08
+cd MacOBlox/flatpak
+flatpak run --env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak --command=flatpak-builder org.flatpak.Builder --user --install --force-clean build-dir xyz.narez.MacOBlox.yml
+```
+
+Roblox Studio is not in the Flatpak yet.
 </details>
 
 <details>

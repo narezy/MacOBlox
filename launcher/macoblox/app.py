@@ -1,6 +1,7 @@
 """GTK 4 / libadwaita interface of the Mac O’ Blox launcher."""
 
 import json
+import os
 import threading
 
 import gi
@@ -111,6 +112,8 @@ class PlayPage(Gtk.Box):
         self.studio.add_css_class("pill")
         self.studio.set_size_request(220, -1)
         self.studio.connect("clicked", lambda *_args: window.studio_clicked())
+        # Studio needs Wine, which the Flatpak does not have yet.
+        self.studio.set_visible(not os.path.exists("/.flatpak-info"))
         box.append(self.studio)
         self.studio_progress = Gtk.ProgressBar(show_text=True, visible=False)
         box.append(self.studio_progress)

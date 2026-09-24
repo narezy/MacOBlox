@@ -25,19 +25,27 @@ DATA_DIR = (PROJECT if os.access(PROJECT, os.W_OK) else
             Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "macoblox")
 APP_BUNDLE = DATA_DIR / "RobloxPlayer.app"
 BUILD_DIR = DATA_DIR / "build"
-SHIM = BUILD_DIR / "libMacOBloxShims.dylib"
+# A package may ship the shim built already (the Flatpak has no compiler).
+PREBUILT_SHIM = os.environ.get("MACOBLOX_PREBUILT_SHIM")
+SHIM_DIR = Path(PREBUILT_SHIM) if PREBUILT_SHIM else BUILD_DIR
+SHIM = SHIM_DIR / "libMacOBloxShims.dylib"
 # Frameworks RobloxPlayer links that Darling lacks; stubs from frameworks/.
 FRAMEWORKS = ["CoreML", "CoreHaptics", "DeviceCheck"]
-FRAMEWORKS_BUILD = BUILD_DIR / "frameworks"
+FRAMEWORKS_BUILD = SHIM_DIR / "frameworks"
 # Packages install Darling's macOS root to /usr/libexec/darling, a build from
-# source to /usr/local/libexec/darling.
-DARLING_SYSROOT = next((path for path in (Path("/usr/libexec/darling"), Path("/usr/local/libexec/darling"))
+# source to /usr/local/libexec/darling, the Flatpak to /app/libexec/darling.
+DARLING_SYSROOT = next((path for path in (Path("/usr/libexec/darling"), Path("/usr/local/libexec/darling"),
+                                          Path("/app/libexec/darling"))
                         if path.is_dir()), Path("/usr/libexec/darling"))
 DARLING_PREFIX = Path(os.environ.get("DPREFIX") or Path.home() / ".darling")
 # Rootless Darling (for sandboxes such as Flatpak, see flatpak/darling-noroot.c):
 # this library is preloaded into `darling` only, never into the launcher.
 NOROOT_LIB = os.environ.get("MACOBLOX_NOROOT_LIB")
-NATIVE_LIBS = ["libavcodec", "libavformat", "libavutil", "libswresample"]
+# Darling's bridges to host libraries that Roblox never uses, relative to the
+# macOS root: when the host lacks the library, they are patched to load nothing.
+NATIVE_LIBS = [f"usr/lib/native/{name}.dylib"
+               for name in ("libavcodec", "libavformat", "libavutil", "libswresample", "libjpeg", "libfuse")]
+NATIVE_LIBS.append("System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGLU.dylib")
 NATIVE_BUILD = BUILD_DIR / "native"
 BUILD_SCRIPT = PROJECT / "build_debug_shim.sh"
 LOGS = DATA_DIR / "logs"
@@ -313,6 +321,8 @@ def cleanup_logs(keep):
 
 
 def build_shim():
+    if PREBUILT_SHIM:
+        return True, _("The shim comes built with this package")
     result = subprocess.run([str(BUILD_SCRIPT)], capture_output=True, text=True,
                             env=dict(os.environ, MACOBLOX_BUILD_DIR=str(BUILD_DIR),
                                      DARLING_SYSROOT=str(DARLING_SYSROOT)))
@@ -326,7 +336,9 @@ def shim_built():
 
 def missing_tools():
     """Programs the launcher needs that are not installed."""
-    needed = {"darling": "darling", "clang": "clang", "ld.lld": "lld", "unzip": "unzip"}
+    needed = {"darling": "darling", "unzip": "unzip"}
+    if not PREBUILT_SHIM:
+        needed.update({"clang": "clang", "ld.lld": "lld"})
     missing = [package for program, package in needed.items() if not shutil.which(program)]
     if not DARLING_SYSROOT.is_dir() and "darling" not in missing:
         missing.append(f"darling ({DARLING_SYSROOT})")
@@ -361,10 +373,10 @@ def prepare_prefix(env):
     for name in frameworks:
         shutil.copytree(FRAMEWORKS_BUILD / f"{name}.framework", target / f"{name}.framework",
                         symlinks=True, dirs_exist_ok=True)
-    target = DARLING_PREFIX / "usr" / "lib" / "native"
-    target.mkdir(parents=True, exist_ok=True)
-    for path in bridges:
-        shutil.copy2(path, target / path.name)
+    for relative, path in bridges:
+        target = DARLING_PREFIX / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
 
 
 def _initializer_offset(data):
@@ -414,18 +426,20 @@ def _host_libraries():
 
 
 def _patched_ffmpeg_bridges():
-    """Darling's ffmpeg bridges (/usr/lib/native/libav*.dylib) load one exact
-    host ffmpeg version from an initializer and the game exits when it is
-    missing ("Cannot load libavformat.so.60"). Roblox does not need ffmpeg,
-    so when the host has another version, the prefix gets copies whose
-    initializer returns right away. Returns the patched files to install."""
+    """Darling's bridges to host libraries (/usr/lib/native/libav*.dylib and
+    others) load one exact host version from an initializer, and the game
+    exits when it is missing ("Cannot load libavformat.so.60"). Roblox does
+    not need these, so when the host has another version (or none, as in the
+    Flatpak), the prefix gets copies whose initializer returns right away.
+    Returns (path in the macOS root, patched file) pairs to install."""
     host = None
     patched = []
-    for name in NATIVE_LIBS:
+    for relative in NATIVE_LIBS:
         # A rootless prefix is a full copy of the macOS root, so the stock
         # bridge may already be in it; patch whichever copy Darling uses.
-        installed = DARLING_PREFIX / "usr/lib/native" / f"{name}.dylib"
-        stock = installed if installed.exists() else DARLING_SYSROOT / "usr/lib/native" / f"{name}.dylib"
+        installed = DARLING_PREFIX / relative
+        stock = installed if installed.exists() else DARLING_SYSROOT / relative
+        name = Path(relative).stem
         try:
             data = bytearray(stock.read_bytes())
         except OSError:
@@ -441,7 +455,7 @@ def _patched_ffmpeg_bridges():
         NATIVE_BUILD.mkdir(parents=True, exist_ok=True)
         (NATIVE_BUILD / f"{name}.dylib").write_bytes(data)
         (NATIVE_BUILD / f"{name}.dylib").chmod(0o755)
-        patched.append(NATIVE_BUILD / f"{name}.dylib")
+        patched.append((relative, NATIVE_BUILD / f"{name}.dylib"))
     return patched
 
 
@@ -546,18 +560,37 @@ def host_vram_bytes():
 
 class HostAudio:
     """Game sound played on the host. The shim writes raw float32 stereo
-    44.1 kHz audio into a FIFO and pw-cat plays it through PipeWire. Darling's
+    44.1 kHz audio into a FIFO and pw-cat plays it through PipeWire, or pacat
+    through PulseAudio where only that is reachable (the Flatpak). Darling's
     own audio (CoreAudio over PulseAudio on GCD) overflows Darling's
     workqueue thread stacks within seconds, so it is not used. The launcher
     keeps the FIFO open read/write for the whole session, so pw-cat never
     sees end of file and the game can reopen it any time."""
 
+    NAME = "Roblox (Mac O’ Blox)"
+
     def __init__(self, fifo, keep, player):
         self.fifo, self.keep, self.player = fifo, keep, player
 
     @classmethod
+    def _player_command(cls, fifo):
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+        pipewire = os.environ.get("PIPEWIRE_REMOTE") or (runtime / "pipewire-0").exists()
+        if pipewire and shutil.which("pw-cat"):
+            return ["pw-cat", "--playback", "--raw", "--format", "f32", "--rate", "44100",
+                    "--channels", "2", "--latency", "40ms", "--media-role", "Game",
+                    "-P", '{ application.name = "Roblox" application.icon-name = "macoblox" '
+                          f'media.name = "{cls.NAME}" }}',
+                    str(fifo)]
+        if shutil.which("pacat"):
+            return ["pacat", "--playback", "--raw", "--format=float32le", "--rate=44100",
+                    "--channels=2", "--latency-msec=40", "--client-name=Roblox",
+                    f"--stream-name={cls.NAME}", "--property=media.role=game", str(fifo)]
+        return None
+
+    @classmethod
     def start(cls):
-        if not shutil.which("pw-cat"):
+        if not cls._player_command(""):
             return None
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         fifo = CACHE_DIR / f"audio-{os.getpid()}.fifo"
@@ -566,11 +599,7 @@ class HostAudio:
         os.mkfifo(fifo, 0o600)
         keep = os.open(fifo, os.O_RDWR)
         player = subprocess.Popen(
-            ["pw-cat", "--playback", "--raw", "--format", "f32", "--rate", "44100",
-             "--channels", "2", "--latency", "40ms", "--media-role", "Game",
-             "-P", '{ application.name = "Roblox" application.icon-name = "macoblox" '
-                   'media.name = "Roblox (Mac O’ Blox)" }',
-             str(fifo)],
+            cls._player_command(fifo),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return cls(fifo, keep, player)
 
