@@ -413,7 +413,8 @@ class SettingsPage(Adw.PreferencesPage):
                            ("trace_udp", "Network tracing (UDP)"),
                            ("trace_lock", "Mouse lock tracing"),
                            ("trace_events", "Mouse event tracing"),
-                           ("trace_gl", "OpenGL tracing")]:
+                           ("trace_gl", "OpenGL tracing"),
+                           ("fps_log", "Frame rate in the log")]:
             row = Adw.SwitchRow(title=_(title), subtitle=core.TRACE_ENV[key], active=settings[key])
             row.connect("notify::active", lambda r, _pspec, k=key: window.set_setting(k, r.get_active()))
             diagnostics.add(row)
