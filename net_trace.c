@@ -156,7 +156,11 @@ static void check_stalls(void) {
     for (int fd = 0; fd < 1024; fd++) {
         if (!reader_thread[fd] || !last_read_time[fd] || stall_dumped[fd])
             continue;
-        if (now - last_read_time[fd] < 2000000000ULL)
+        /* A read recorded after `now` was taken (another thread) gives a
+         * negative age; a socket idle for long may belong to a reader thread
+         * that has exited, and signalling it could crash the game. */
+        if (last_read_time[fd] > now || now - last_read_time[fd] < 2000000000ULL ||
+            now - last_read_time[fd] > 30000000000ULL)
             continue;
         char byte;
         int saved = *__error();
