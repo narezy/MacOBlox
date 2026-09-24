@@ -615,7 +615,8 @@ class LauncherWindow(Adw.ApplicationWindow):
         i18n.set_language(self.settings.get("language", "en"))
         self.session = None
         self.last_log = None
-        self.build("play")
+        # MACOBLOX_PAGE opens another tab first (for screenshots).
+        self.build(os.environ.get("MACOBLOX_PAGE", "play"))
 
     def build(self, page):
         """(Re)create the interface, e.g. after the language changes."""
@@ -801,6 +802,9 @@ class LauncherApp(Adw.Application):
             self.window.connect("close-request", self._close)
         self.window.set_visible(True)
         self.window.present()
+        if os.environ.get("MACOBLOX_PAGE"):
+            # Screenshots: no focused field.
+            GLib.timeout_add(300, lambda: self.window.set_focus(None) and False)
 
     def _close(self, window):
         if window.session:
