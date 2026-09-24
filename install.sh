@@ -80,8 +80,18 @@ main() {
     *" arch "*) install_arch ;;
     *" debian "* | *" ubuntu "*) install_debian ;;
     *" fedora "*) install_fedora ;;
-    *) say "Unknown distribution, install Darling, clang, lld, unzip, PipeWire, PyGObject, GTK 4 and libadwaita yourself" ;;
+    *)
+      # Derivatives that do not say what they are based on (LeagueArchy has
+      # no ID_LIKE): go by the package manager.
+      if command -v pacman >/dev/null; then install_arch
+      elif command -v apt-get >/dev/null; then install_debian
+      elif command -v dnf >/dev/null; then install_fedora
+      else say "Unknown distribution, install Darling, clang, lld, unzip, PipeWire, PyGObject, GTK 4 and libadwaita yourself"
+      fi ;;
   esac
+  for tool in clang ld.lld unzip; do
+    command -v "$tool" >/dev/null || die "$tool is not installed. Install clang, lld and unzip with your package manager and run this again."
+  done
   command -v darling >/dev/null ||
     die "Darling is not installed. Build it with https://docs.darlinghq.org/build-instructions.html and run this again."
 

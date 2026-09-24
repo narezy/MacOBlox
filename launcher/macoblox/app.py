@@ -143,6 +143,8 @@ class PlayPage(Gtk.Box):
         parts = [_("Roblox {version}", version=version) if version else _("Roblox not found")]
         parts.append(_("Darling running") if core.darlingserver_running()
                      else _("Darling starts with the game"))
+        if version and not running and not core.signed_in():
+            parts.append(_("Sign in with Quick Login"))
         self.status.set_description(" · ".join(parts))
         self.play.set_sensitive(not running)
         if running:
@@ -643,6 +645,16 @@ class LauncherWindow(Adw.ApplicationWindow):
         # Rebuild after the combo row finished handling its own signal.
         GLib.idle_add(lambda: self.build("settings") and False)
 
+    def _captcha_dialog(self):
+        dialog = Adw.AlertDialog(
+            heading=_("Roblox closed at the captcha"),
+            body=_("Signing up and signing in with a password show a captcha in a built-in browser, "
+                   "which does not work here yet. Create the account on roblox.com, then sign in "
+                   "with Quick Login: Roblox shows a code, enter it on a phone or in a browser "
+                   "where you are already signed in."))
+        dialog.add_response("ok", _("OK"))
+        dialog.present(self)
+
     def play_clicked(self):
         if core.installed_version():
             self.launch()
@@ -754,7 +766,10 @@ class LauncherWindow(Adw.ApplicationWindow):
         else:
             self.get_application().quit()
         if status not in (0, -1):
-            _toast(self.toasts, _("Roblox exited with code {status}", status=status))
+            if core.exit_reason(self.last_log) == "captcha":
+                self._captcha_dialog()
+            else:
+                _toast(self.toasts, _("Roblox exited with code {status}", status=status))
         return False
 
     def stop(self):

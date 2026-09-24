@@ -34,6 +34,9 @@ FRAMEWORKS_BUILD = BUILD_DIR / "frameworks"
 DARLING_SYSROOT = next((path for path in (Path("/usr/libexec/darling"), Path("/usr/local/libexec/darling"))
                         if path.is_dir()), Path("/usr/libexec/darling"))
 DARLING_PREFIX = Path(os.environ.get("DPREFIX") or Path.home() / ".darling")
+# Rootless Darling (for sandboxes such as Flatpak, see flatpak/darling-noroot.c):
+# this library is preloaded into `darling` only, never into the launcher.
+NOROOT_LIB = os.environ.get("MACOBLOX_NOROOT_LIB")
 NATIVE_LIBS = ["libavcodec", "libavformat", "libavutil", "libswresample"]
 NATIVE_BUILD = BUILD_DIR / "native"
 BUILD_SCRIPT = PROJECT / "build_debug_shim.sh"
@@ -248,6 +251,33 @@ def _darling_path(path):
     return "/" + str(path.relative_to(DARLING_PREFIX))
 
 
+def signed_in():
+    """Whether a Roblox login is saved (only the cookie's name is read)."""
+    try:
+        with open(SESSION_FILES[0], "rb") as file:
+            cookies = plistlib.load(file)
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return False
+    return any(isinstance(c, dict) and c.get("Name") == ".ROBLOSECURITY" and c.get("Value")
+               for c in cookies if isinstance(cookies, list))
+
+
+def exit_reason(log_path):
+    """A known cause for a game that quit, from its log, or None.
+    "captcha": Roblox tried to show its web view (captcha on sign-up or
+    password sign-in), which Darling does not have."""
+    try:
+        with open(log_path, "rb") as file:
+            file.seek(0, os.SEEK_END)
+            file.seek(max(0, file.tell() - 16384))
+            tail = file.read().decode(errors="replace")
+    except (OSError, TypeError):
+        return None
+    if "class WKWebView" in tail or "Selector setDetachesHiddenViews:" in tail:
+        return "captcha"
+    return None
+
+
 def logout():
     # Files inside ~/.darling must not be removed from the host while
     # darlingserver runs: its overlay then stops showing new files to the host.
@@ -388,9 +418,10 @@ def _patched_ffmpeg_bridges():
     host = None
     patched = []
     for name in NATIVE_LIBS:
-        if (DARLING_PREFIX / "usr/lib/native" / f"{name}.dylib").exists():
-            continue
-        stock = DARLING_SYSROOT / "usr/lib/native" / f"{name}.dylib"
+        # A rootless prefix is a full copy of the macOS root, so the stock
+        # bridge may already be in it; patch whichever copy Darling uses.
+        installed = DARLING_PREFIX / "usr/lib/native" / f"{name}.dylib"
+        stock = installed if installed.exists() else DARLING_SYSROOT / "usr/lib/native" / f"{name}.dylib"
         try:
             data = bytearray(stock.read_bytes())
         except OSError:
@@ -400,13 +431,13 @@ def _patched_ffmpeg_bridges():
         if not wanted or wanted.group().decode() in host:
             continue
         offset = _initializer_offset(data)
-        if offset is None or data[offset] != 0x55:  # push %rbp
+        if offset is None or data[offset] != 0x55:  # push %rbp; 0xC3 = already patched
             continue
         data[offset] = 0xC3  # ret
         NATIVE_BUILD.mkdir(parents=True, exist_ok=True)
-        (NATIVE_BUILD / stock.name).write_bytes(data)
-        (NATIVE_BUILD / stock.name).chmod(0o755)
-        patched.append(NATIVE_BUILD / stock.name)
+        (NATIVE_BUILD / f"{name}.dylib").write_bytes(data)
+        (NATIVE_BUILD / f"{name}.dylib").chmod(0o755)
+        patched.append(NATIVE_BUILD / f"{name}.dylib")
     return patched
 
 
@@ -568,6 +599,8 @@ class RobloxSession:
         env = dict(os.environ)
         # Darling's Mesa receives X11 displays; a Wayland session may say otherwise.
         env["EGL_PLATFORM"] = "x11"
+        if NOROOT_LIB:
+            env["LD_PRELOAD"] = NOROOT_LIB
         return env
 
     def shim_variables(self):
